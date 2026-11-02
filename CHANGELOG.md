@@ -6,6 +6,10 @@ Publish the connector under `@matuto-ai/opencode-psst-connector` and rename the 
 
 ## Unreleased
 
+- Limit receive and heartbeat to selected local TUI conversations, resuming the same identity without closing inactive sessions.
+- Add exact native model and bounded configured project metadata; keep immutable retry payloads.
+- Add explicit registration-v2 opt-in and confirmed-expiry incarnation recovery; preserve old journals and block uncertain storage. Broker retention remains a separate opt-in.
+
 - Standardize new native notices as `Psst · new message · From: <name> · <type> · <preview>` in English; keep IDs and correlation out of the UI preview without changing full payloads or existing persisted notices.
 
 ## 0.5.1 (unreleased)

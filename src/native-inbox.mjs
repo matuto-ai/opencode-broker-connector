@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, fstatSync, constants } from 'node:fs';
+import { openSync, closeSync, readFileSync, writeFileSync, fsyncSync, fstatSync, constants, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { privateDirectory } from './config.mjs';
@@ -8,9 +8,13 @@ import { privateDirectory } from './config.mjs';
  * Exclusive Inbox ownership protects concurrent owners. Never reset a partial,
  * foreign or unreadable manifest: its broker/native effects may be unknown.
  */
-export function openNativeInbox({ reference, settings, binding }) {
+export function openNativeInbox({ reference, settings, binding, incarnationOwner = false }) {
   const key = createHash('sha256').update(canonical({ binding, broker: settings.broker.url })).digest('hex');
   const directory = privateDirectory(join(privateDirectory(settings.stateDirectory), 'opencode-v2-' + key));
+  if (!incarnationOwner) {
+    try { lstatSync(join(directory, 'current-incarnation.json')); throw new Error('native_incarnation_required'); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
   const path = join(directory, 'binding.json');
   let fd;
   try {

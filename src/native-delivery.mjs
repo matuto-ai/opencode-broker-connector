@@ -17,10 +17,10 @@ export function nativeSessionBinding(info, hostID) {
  * A successful receipt means durable native admission, NOT model consumption.
  * No mutation retry: native cancellation removes its idempotency lookup row.
  */
-export function createNativeDelivery({ session, inbox, binding, signal, verify, interval = 250,
+export function createNativeDelivery({ session, inbox, binding, signal, verify, available = () => true, interval = 250,
   requestTimeout = 2000, onDiagnostic = () => {} }) {
   if (!session || ['synthetic', 'context'].some(key => typeof session[key] !== 'function')
-    || !(signal instanceof AbortSignal) || typeof verify !== 'function' || !id(binding?.sessionID)
+    || !(signal instanceof AbortSignal) || typeof verify !== 'function' || typeof available !== 'function' || !id(binding?.sessionID)
     || !Number.isSafeInteger(interval) || interval < 10 || interval > 60000
     || !Number.isSafeInteger(requestTimeout) || requestTimeout < 10 || requestTimeout > 30000) throw new Error('native_capability_unavailable');
   inbox.transaction(() => inbox.db.exec('CREATE TABLE IF NOT EXISTS v2_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)'));
@@ -34,7 +34,7 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
     native_id TEXT NOT NULL UNIQUE, injection_id TEXT NOT NULL, payload TEXT NOT NULL,
     promoted INTEGER NOT NULL DEFAULT 0)`));
   let stopped = false, running, timer, epoch = 0;
-  const active = () => !stopped && !signal.aborted;
+  const active = () => !stopped && !signal.aborted && available();
   const diagnostic = code => { try { onDiagnostic({ code }); } catch {} };
   async function call(method, input, permitted = active) {
     const bounded = AbortSignal.any([signal, AbortSignal.timeout(requestTimeout)]);
@@ -118,15 +118,25 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
     }, { growth: Buffer.byteLength(target.payload) * 2 + 8192 });
     // Even an aborted request may have reached the server. Leave its journal
     // pinned, including on timeout, exception, cancellation or payload mismatch.
-    if (!active() || observedEpoch !== epoch) return;
+    let invoked = false;
+    const notInvoked = () => inbox.transaction(() => {
+      const row = inbox.head();
+      if (row?.message_id !== head.message_id || row.state !== 'injecting' || row.injection_id !== target.injection_id) throw new Error('native_inbox_changed');
+      inbox.db.prepare("UPDATE inbox SET state='pending',injection_id=NULL WHERE message_id=?").run(head.message_id);
+      inbox.db.prepare('DELETE FROM v2_submissions WHERE broker_message_id=? AND injection_id=?').run(head.message_id, target.injection_id);
+    });
+    if (!active() || observedEpoch !== epoch) { notInvoked(); return; }
     try {
-      const receipt = await call(session.synthetic.bind(session), { sessionID: binding.sessionID,
+      const receipt = await call((...args) => { invoked = true; return session.synthetic(...args); }, { sessionID: binding.sessionID,
         id: target.native_id, ...payload, delivery: 'queue', resume: true }, () => active() && observedEpoch === epoch);
       if (!active() || observedEpoch !== epoch || !await current()) return;
       if (!exactAdmission(receipt, target)) { diagnostic('native_receipt_mismatch'); return; }
       accept(head, target);
       diagnostic('native_admission_confirmed');
-    } catch { diagnostic('native_admission_uncertain'); }
+    } catch {
+      if (!invoked) { notInvoked(); diagnostic('native_admission_deferred'); }
+      else diagnostic('native_admission_uncertain');
+    }
   }
   function tick() {
     if (!active() || running) return running;

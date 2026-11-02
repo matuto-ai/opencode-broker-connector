@@ -11,7 +11,7 @@ export default {
   async setup(ctx) {
     const reference = await loadBrokerReference();
     const connectionFile = ctx.options?.connectionFile ?? process.env.PSST_CONFIG_FILE;
-    const runtime = await setupNativePlugin({ ctx, reference, tool, setupEnabled: !connectionFile,
+    const runtime = await setupNativePlugin({ ctx, reference, tool, metadataOptions: ctx.options ?? {}, setupEnabled: !connectionFile,
       loadSettings: () => connectionFile ? readExistingConnection(connectionFile) : readInstallation() });
     return runtime.dispose;
   },

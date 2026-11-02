@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 export const TYPES = Object.freeze(['pi', 'antigravity-cli', 'claude-code', 'opencode']);
 export const DEFAULTS = Object.freeze({
   heartbeat_seconds: 60, lease_seconds: 180, claim_seconds: 120, max_wait_seconds: 30,
+  offline_notice_seconds: 600,
   default_ttl_seconds: 86400, min_ttl_seconds: 60, max_ttl_seconds: 604800,
   max_message_bytes: 65536, max_request_bytes: 98304,
   max_pending_messages: 1000, max_pending_bytes: 67108864,
@@ -25,6 +26,7 @@ const ERROR_TEXT = Object.freeze({
   idempotency_conflict: ['This key was already used for a different request.', 'Reconcile the original request; do not change an uncertain request.'],
   metadata_conflict: ['The metadata revision changed.', 'Read the current revision and reconcile the metadata patch.'],
   claim_conflict: ['The claim is not current.', 'Reconcile the claim before acknowledging or requesting another.'],
+  registration_upgrade_required: ['Registration v2 is required.', 'Update the connector; do not retry this registration with a new identity.'],
   session_closed: ['This session is closed.', 'Create a new identity only for a new harness session.'],
   message_expired: ['The message transport deadline passed.', 'Read the receipt; expiry does not retract an accepted inbox item.'],
   payload_too_large: ['The request exceeds a byte or item limit.', 'Reduce the indicated field before retrying.'],
@@ -140,11 +142,16 @@ export function validateMetadata(value, { patch = false, path = 'body.metadata' 
 
 export function validateRegistration(value) {
   const fields = ['protocol_version', 'client_id', 'client_type', 'session_instance_id', 'connection_id', 'previous_epoch', 'metadata', 'capabilities'];
-  object(value, fields, fields, 'body');
+  object(value, [...fields, 'registration_version', 'requested_at'], fields, 'body');
+  const version = value.registration_version ?? 1;
+  integer(version, 1, 2, 'body.registration_version');
+  if (version === 1 && value.requested_at !== undefined) invalid('body.requested_at');
+  const freshness = version === 2 ? { registration_version: 2, requested_at: integer(value.requested_at, 0, Number.MAX_SAFE_INTEGER, 'body.requested_at') } : {};
   const type = oneOf(value.client_type, TYPES, 'body.client_type');
   const c = object(value.capabilities, ['protocol_version', 'adapter_version', 'client_type', 'receive_enabled', 'durable_inbox'], ['protocol_version', 'adapter_version', 'client_type', 'receive_enabled', 'durable_inbox'], 'body.capabilities');
   if (c.client_type !== type) invalid('body.capabilities.client_type');
   return {
+    ...freshness,
     protocol_version: oneOf(value.protocol_version, ['1'], 'body.protocol_version'),
     client_id: validateUuid(value.client_id, 'body.client_id'),
     client_type: type,

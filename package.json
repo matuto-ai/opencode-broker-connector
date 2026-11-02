@@ -18,7 +18,8 @@
   "main": "./plugin/index.mjs",
   "exports": {
     ".": "./plugin/index.mjs",
-    "./server": "./plugin/index.mjs"
+    "./server": "./plugin/index.mjs",
+    "./tui": "./plugin/tui.mjs"
   },
   "files": [
     "plugin",

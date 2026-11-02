@@ -29,3 +29,5 @@ Official contracts: [plugin manager](https://opencode.ai/v2/docs/plugins/),
 [server plugins](https://opencode.ai/v2/docs/build/plugins/server),
 [synthetic admission](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/core/src/session/session.ts),
 [host loader](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/plugin/src/host.ts).
+
+Unreleased: automatic transport is additionally limited by the local TUI selection preference described in [active-conversation.md](active-conversation.md). This does not grant authentication or tool authority.

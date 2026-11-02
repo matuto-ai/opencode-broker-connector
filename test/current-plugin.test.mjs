@@ -16,9 +16,9 @@ async function fixture(t) {
   session:{get:async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:dir},time:{created:1}}),synthetic:async()=>{},context:async()=>[{id:'msg',type:'assistant',content:['call1','call2'].map(id=>({type:'tool',id,name:'broker_send',time:{created:Date.now()-1000}})),time:{created:Date.now()-1000}}],hook:async(name,fn)=>{hooks.set(name,fn);return{dispose:async()=>hooks.delete(name)};}},
   tool:{transform:async callback=>{callback({get:name=>tools.get(name),add:definition=>tools.set(definition.name,definition)});return{dispose:async()=>tools.clear()};}},
   event:{async *subscribe({signal}){if(signal.aborted)return;await new Promise(r=>signal.addEventListener('abort',r,{once:true}));}}};
- const options={ctx,reference,tool,setupOptions:{directory:join(dir,'installation')},setupEnabled:false,loadSettings:async()=>settings,clientFactory:inbox=>({inbox}),
+ const options={presenceFactory:()=>({selected:()=>({has:()=>true})}),ctx,reference,tool,setupOptions:{directory:join(dir,'installation')},setupEnabled:false,loadSettings:async()=>settings,clientFactory:inbox=>({inbox}),
   adapterFactory:({client,binding,currentBinding,operationContext})=>{
-   const state={identity:client.inbox.identity,binding,operationContext,client};states.push(state);
+   const state={identity:client.inbox.identity,binding,currentBinding,operationContext,client};states.push(state);
    return{start:async()=>assert.ok(await currentBinding()),stop:async()=>client.inbox.close(),tools:Object.fromEntries(reference.TOOL_DEFINITIONS.map(d=>[d.name,{execute:async(args,context)=>JSON.stringify({sessionID:binding.sessionID,operation:operationContext(context)})}]))};},
   deliveryFactory:()=>({start(){},stop:async()=>{},event(){}})};
  const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());return{dir,ctx,tools,hooks,states,runtime,settings,stored,options};
@@ -97,4 +97,34 @@ test('native archive arriving during startup fences registration after asynchron
  const runtime=await setupNativePlugin({...f.options,loadSettings:async()=>{if(hold){entered();await new Promise(r=>release=r);}return f.settings;}});t.after(()=>runtime.dispose());
  hold=true;const connecting=runtime.connect('one');await observed;emit();await new Promise(r=>setImmediate(r));release();await assert.rejects(()=>connecting);assert.equal(f.states.length,0);
  assert.equal([...f.stored.values()].find(v=>v?.sessionID==='one').enabled,false);
+});
+
+test('selected-only local leases suspend transport without closing identity and reconnect after expiry',async t=>{
+ const {createPresenceWriter,presenceDirectory}=await import('../src/active-presence.mjs');
+ const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();
+ const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};
+ const options={...f.options};delete options.presenceFactory;delete options.adapterFactory;delete options.clientFactory;
+ const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());
+ await assert.rejects(()=>runtime.connect('one'),/not_selected/);assert.equal(runtime.status('one').connected,false);
+ const directory=presenceDirectory(join(f.dir,'installation'),f.ctx.location),a=createPresenceWriter({directory}),b=createPresenceWriter({directory});t.after(()=>{a.stop();b.stop();});
+ a.write('one');await runtime.connect('one');const one=runtime.status('one').client_id;
+ b.write('two');await runtime.connect('two');const two=runtime.status('two').client_id;assert.notEqual(one,two);
+ a.write('two');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('one').connected,false);assert.equal(runtime.status('two').connected,true);
+ assert.equal(broker.store.session(broker.b.entry,one).closed,false);
+ a.stop();await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('two').connected,true,'second owner keeps same runtime');
+ b.write(null);await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('two').connected,false);assert.equal(broker.store.session(broker.b.entry,two).closed,false);
+ broker.advance(200000);b.write('one');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('one').client_id,one);assert.equal(runtime.status('one').connected,true);
+ b.write('never-authorized');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('never-authorized').client_id,null,'file selection cannot create new binding');
+});
+test('selection change during native getInfo cannot return a usable binding',async t=>{
+ const f=await fixture(t);await f.runtime.dispose();let active=true;
+ const runtime=await setupNativePlugin({...f.options,presenceFactory:()=>({selected:()=>new Set(active?['one']:[])})});t.after(()=>runtime.dispose());await runtime.connect('one');
+ const original=f.ctx.session.get;let release,entered;const ready=new Promise(r=>entered=r);
+ f.ctx.session.get=async args=>{entered();await new Promise(r=>release=r);return original(args);};
+ const pending=f.states.at(-1).currentBinding();await ready;active=false;release();assert.equal(await pending,null);
+});
+test('explicit archive reason resumes after native unarchive but unknown disabled records remain disabled',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const id=f.runtime.status('one').client_id;await f.runtime.dispose();
+ const key=[...f.stored.keys()].find(k=>k.startsWith('psst-v2-session:'));f.stored.set(key,{sessionID:'one',enabled:false,reason:'archived'});
+ const next=await setupNativePlugin(f.options);t.after(()=>next.dispose());await next.connect('one');assert.equal(next.status('one').client_id,id);
 });
