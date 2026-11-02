@@ -25,5 +25,5 @@ export function nativeDescription(rawEnvelope) {
   const envelope = validateEnvelope(rawEnvelope);
   const sender = literal(envelope.sender.name, PREVIEW_SENDER_LIMIT);
   const preview = literal(envelope.content.text, PREVIEW_TEXT_LIMIT);
-  return `Psst · outro agente ${sender}/${envelope.sender.client_id.slice(0, 8)} · ${preview}`;
+  return `Psst · new message · From: ${sender} · ${envelope.sender.client_type} · ${preview}`;
 }

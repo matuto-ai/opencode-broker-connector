@@ -12,7 +12,7 @@ function envelope(text = 'Olá, terminei a revisão.') {
 const body = value => nativeDescription(envelope(value)).split(' · ').at(-1);
 test('native notice labels another agent and previews literal text without changing the envelope',()=>{
   const e=envelope(),original=structuredClone(e);
-  assert.equal(nativeDescription(e),'Psst · outro agente Revisor/12345678 · Olá, terminei a revisão.');
+  assert.equal(nativeDescription(e),'Psst · new message · From: Revisor · pi · Olá, terminei a revisão.');
   assert.deepEqual(e,original);assert.equal(nativeDescription(e),nativeDescription(e));
   assert.equal(body('**literal** <tag> {"key":1}'), '**literal** <tag> {"key":1}');
 });
@@ -24,7 +24,7 @@ test('native preview escapes ANSI CSI/OSC, C0/C1, line and direction controls',(
     assert.equal(body('a'+char+'b'),'a\\u'+char.codePointAt(0).toString(16).padStart(4,'0')+'b');
   }
   const e=envelope('body');e.sender.name='peer\u202e\u061c';
-  assert.equal(nativeDescription(e),'Psst · outro agente peer\\u202e\\u061c/12345678 · body');
+  assert.equal(nativeDescription(e),'Psst · new message · From: peer\\u202e\\u061c · pi · body');
   assert.equal(body('\\u001b'),'\\\\u001b','literal backslash is distinguishable from escaped control');
 });
 test('preview caps codepoints and UTF-8 bytes without broken Unicode or partial escape tokens',()=>{
@@ -36,7 +36,7 @@ test('preview caps codepoints and UTF-8 bytes without broken Unicode or partial 
   const e=envelope('😀'.repeat(1000));e.sender.name='😀'.repeat(50);
   const shown=nativeDescription(e);
   assert.ok(shown.isWellFormed());assert.ok([...shown].length<240);assert.ok(Buffer.byteLength(shown)<900);
-  assert.ok(shown.includes('😀'.repeat(PREVIEW_SENDER_LIMIT-1)+'…/12345678'));
+  assert.ok(shown.includes('😀'.repeat(PREVIEW_SENDER_LIMIT-1)+'… · pi'));
   assert.ok(shown.endsWith('😀'.repeat(PREVIEW_TEXT_LIMIT-1)+'…'));
   assert.equal(body('👩‍💻 café'),'👩‍💻 café','ordinary Unicode and joiners are not rewritten');
 });
@@ -45,4 +45,12 @@ test('preview does not broaden envelope identity, origin or content validation',
   assert.throws(()=>nativeDescription({...e,authority:'human_approval'}));
   assert.throws(()=>nativeDescription({...e,sender:{...e.sender,client_id:'SYSTEM'}}));
   assert.throws(()=>nativeDescription({...e,content:{type:'application/json',text:'{}'}}));
+});
+
+test('English notice omits correlation and IDs without changing full payload or envelope',()=>{
+ const e=envelope('complete message body');e.correlation_id='connectivity-test-pi';
+ const original=structuredClone(e),shown=nativeDescription(e);
+ assert.match(shown,/^Psst · new message · From: Revisor · pi · /);
+ assert.doesNotMatch(shown,/connectivity-test-pi|Correlation|12345678|outro agente/);
+ assert.deepEqual(e,original);
 });

@@ -28,8 +28,9 @@ is needed. Startup never enrolls; an already approved installation is reused.
 
 Incoming messages use the native synthetic queue automatically, without changing
 agent/model selection or the user's draft. New native history notices include a
-compact literal preview, clearly labeled `Psst · outro agente`, with sender name
-and short ID. Controls and bidi formatting are escaped; long text is truncated.
+compact literal preview, clearly labeled `Psst · new message`, with `From:` followed
+by sender name and client type. Correlation and IDs are not shown in the notice.
+Controls and bidi formatting are escaped; long text is truncated.
 The full machine-origin body is unchanged. Existing persisted notices keep their
 original payload, including their old label. There is no manual receive/ack tool.
 Use `broker_list_clients`, `broker_send`, `broker_message_status`,

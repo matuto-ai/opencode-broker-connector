@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Standardize new native notices as `Psst · new message · From: <name> · <type> · <preview>` in English; keep IDs and correlation out of the UI preview without changing full payloads or existing persisted notices.
+
 ## 0.5.1 (unreleased)
 
 - Make new native history notices show a bounded literal message preview and external-agent sender label, rather than only “Psst agent message”.
