@@ -9,7 +9,7 @@ import { pathToFileURL } from 'node:url';
 const binary=process.env.OPENCODE_BINARY,spec=process.env.PSST_OPENCODE_PACKAGE_SPEC;
 test('official OpenCode plugin manager installs the exact npm package and preserves global configuration',
  {skip:!binary||!spec,timeout:180000},t=>{
- assert.match(spec,/^@matuto-ai\/opencode-broker-connector@0\.5\.\d+$/,'installer proof requires a published exact npm version');
+ assert.match(spec,/^@matuto-ai\/opencode-psst-connector@0\.6\.0$/,'installer proof requires a published exact npm version');
  const dir=mkdtempSync(join(tmpdir(),'psst-native-installer-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
  const configDir=join(dir,'config','opencode');mkdirSync(configDir,{recursive:true});mkdirSync(join(dir,'project'));mkdirSync(join(dir,'home'));
  const configFile=join(configDir,'opencode.json');writeFileSync(configFile,JSON.stringify({plugins:['-fixture.disabled']}));
@@ -23,7 +23,7 @@ test('official OpenCode plugin manager installs the exact npm package and preser
   // not merely the configured package spec.
   const cache=join(dir,'cache','opencode','npm',spec);
   const generations=readdirSync(cache).filter(x=>/^\d+$/.test(x)).sort((a,b)=>Number(a)-Number(b));assert.ok(generations.length>0&&generations.length<=2);
-  const generation=join(cache,generations.at(-1)),name='@matuto-ai/opencode-broker-connector',location=join(generation,'node_modules',name);
+  const generation=join(cache,generations.at(-1)),name='@matuto-ai/opencode-psst-connector',location=join(generation,'node_modules',name);
   const manifest=JSON.parse(readFileSync(join(location,'package.json'),'utf8'));assert.equal(manifest.name,name);assert.deepEqual(manifest.exports,{'.':'./plugin/index.mjs','./server':'./plugin/index.mjs'});
   assert.deepEqual(manifest.dependencies,{zod:'4.1.8'});
   const lock=JSON.parse(readFileSync(join(generation,'package-lock.json'),'utf8'));assert.deepEqual(Object.keys(lock.packages[''].dependencies),[name]);

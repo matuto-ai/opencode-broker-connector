@@ -16,7 +16,7 @@ test('pinned official renderer selects synthetic description as literal generic 
   assert.ok(start>0&&end>start);
   const select=new Function('props','stringValue',notice.slice(start,end)+'\nreturn {text:text(),description:description(),source:source(),completion:completion()}');
   const stringValue=value=>typeof value==='string'?value:undefined;
-  for(const description of ['Psst agent message','Psst · outro agente Revisor/12345678 · **literal** <tag> \\u001b']){
+  for(const description of ['Psst agent message','Psst · new message · From: Revisor · pi · **literal** <tag> \\u001b']){
     assert.deepEqual(select({message:{type:'synthetic',text:'full model context, not the notice',description,metadata:{source:'psst'}}},stringValue),
       {text:description,description,source:'psst',completion:false});
   }

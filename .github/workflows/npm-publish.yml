@@ -20,7 +20,7 @@ jobs:
       - name: Verify release version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if(p.name !== '@matuto-ai/opencode-broker-connector' || process.env.RELEASE_TAG !== 'v'+p.version) process.exit(1)"
+        run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if(p.name !== '@matuto-ai/opencode-psst-connector' || process.env.RELEASE_TAG !== 'v'+p.version) process.exit(1)"
       - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
       - run: npm run check
       - run: npm test

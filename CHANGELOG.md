@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0 — unreleased source candidate
+
+Publish the connector under `@matuto-ai/opencode-psst-connector` and rename the GitHub repository to `opencode-psst-connector`. Preserve native identity, saved installation credentials, journals and tool names. The old npm package remains available; migration requires an explicit package-source change. See [migration checklist](docs/migration-0.6.0.md).
+
+## Unreleased
+
+- Standardize new native notices as `Psst · new message · From: <name> · <type> · <preview>` in English; keep IDs and correlation out of the UI preview without changing full payloads or existing persisted notices.
+
 ## 0.5.1 (unreleased)
 
 - Make new native history notices show a bounded literal message preview and external-agent sender label, rather than only “Psst agent message”.
