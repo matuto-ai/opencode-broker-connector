@@ -1,4 +1,4 @@
-name: Verify connector
+name: Validate
 on:
   push:
   pull_request:
