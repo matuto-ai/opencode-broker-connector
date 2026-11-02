@@ -6,6 +6,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Inbox, newSessionIdentity } from '../vendor/broker/reference/inbox.mjs';
 import { createNativeDelivery, nativeSessionBinding } from '../src/native-delivery.mjs';
+import { nativeDescription } from '../src/message-preview.mjs';
+import { nativeMessage, NATIVE_FORMAT } from '../src/message-format.mjs';
+import { canonical } from '../vendor/broker/src/protocol.mjs';
 
 export function envelope(identity, n=1) { const now=Date.now(); return {protocol_version:'1',message_id:randomUUID(),recipient_id:identity.client_id,recipient_sequence:n,sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'fixture agent message'},accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null}; }
 function fixture(t, overrides={}) {
@@ -22,8 +25,8 @@ function fixture(t, overrides={}) {
  };
 }
 test('OpenCode exact synthetic queue receipt consumes locally; bounded one native pending item',async t=>{
- const f=fixture(t);f.accept(1);f.accept(2);await Promise.all([f.delivery.tick(),f.delivery.tick()]);assert.equal(f.submitted.length,1);
- const p=f.submitted[0];assert.equal(p.resume,true);assert.equal(p.delivery,'queue');assert.equal(p.agent,undefined);assert.equal(p.model,undefined);assert.match(p.text,/Broker message from AI agent/);assert.doesNotMatch(p.text,/authority|not a human instruction/);
+ const f=fixture(t);const first=f.accept(1);f.accept(2);await Promise.all([f.delivery.tick(),f.delivery.tick()]);assert.equal(f.submitted.length,1);
+ const p=f.submitted[0];assert.equal(p.description,nativeDescription(first));assert.equal(p.text,nativeMessage(first));assert.deepEqual(p.metadata,{source:'psst',broker_message_id:first.message_id,sender_client_id:first.sender.client_id,format:NATIVE_FORMAT});assert.equal(p.resume,true);assert.equal(p.delivery,'queue');assert.equal(p.agent,undefined);assert.equal(p.model,undefined);assert.match(p.text,/Broker message from AI agent/);assert.doesNotMatch(p.text,/authority|not a human instruction/);
  await f.delivery.tick();assert.equal(f.submitted.length,1);f.promote();await f.delivery.tick();assert.equal(f.submitted.length,2);assert.equal(f.inbox.head(),null);
 });
 test('OpenCode immutable exact payload required, first-wins changed-body response cannot acknowledge',async t=>{
@@ -63,4 +66,33 @@ test('bounded stalled host request drains on stop without accepting a late recei
 test('cancellation queued after durable intent but before deferred dispatch prevents the native effect',async t=>{
  const f=fixture(t);f.accept();let cancel=true;f.inbox.failurePoint=point=>{if(point==='after_commit'&&cancel){cancel=false;queueMicrotask(()=>f.delivery.event({type:'session.execution.interrupted',data:{sessionID:'ses_native',reason:'user'}}));}};
  await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'injecting');await f.delivery.tick();assert.equal(f.submitted.length,0);
+});
+
+// Seed the exact pre-preview journal shape, before loading the new delivery code.
+// No host retry is permitted during this local compatibility reconciliation.
+function legacySubmission(f,e,payloadOverride) {
+ const payload={text:nativeMessage(e),description:'Psst agent message',metadata:{source:'psst',broker_message_id:e.message_id,sender_client_id:e.sender.client_id,format:NATIVE_FORMAT}};
+ const native_id='msg_legacy_'+randomUUID().replaceAll('-',''),injection_id=randomUUID(),stored=payloadOverride??canonical(payload);
+ f.inbox.transaction(()=>{
+  f.inbox.db.prepare('INSERT INTO v2_submissions(broker_message_id,native_id,injection_id,payload) VALUES(?,?,?,?)').run(e.message_id,native_id,injection_id,stored);
+  f.inbox.db.prepare("UPDATE inbox SET state='injecting',injection_id=? WHERE message_id=?").run(injection_id,e.message_id);
+ });
+ return {native_id,injection_id,stored,context:{id:native_id,type:'synthetic',...payload}};
+}
+const storedPayload=(f,e)=>f.inbox.db.prepare('SELECT payload FROM v2_submissions WHERE broker_message_id=?').get(e.message_id).payload;
+test('pre-preview uncertain admission reload requires exact old description, never recomputes or resubmits',async t=>{
+ const f=fixture(t),e=f.accept(),old=legacySubmission(f,e);await f.reopen();
+ assert.equal(f.inbox.head().state,'uncertain');f.context.push({...old.context,description:nativeDescription(e)});
+ await f.delivery.tick();assert.equal(f.inbox.head().state,'uncertain');assert.equal(f.submitted.length,0);assert.equal(storedPayload(f,e),old.stored);
+ f.context[0]=old.context;await f.delivery.tick();assert.equal(f.inbox.head(),null);assert.equal(f.submitted.length,0);assert.equal(storedPayload(f,e),old.stored);
+});
+test('pre-preview accepted outstanding payload survives reload and gates the next new preview',async t=>{
+ const f=fixture(t),e=f.accept(),old=legacySubmission(f,e);
+ f.inbox.recordNativeAcceptance(e.message_id,old.injection_id,{accepted:true,receipt_id:'ses_native/'+old.native_id});const next=f.accept(2);await f.reopen();
+ f.context.push({...old.context,description:nativeDescription(e)});await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(storedPayload(f,e),old.stored);
+ f.context[0]=old.context;await f.delivery.tick();assert.equal(f.submitted.length,1);assert.equal(f.submitted[0].description,nativeDescription(next));assert.equal(storedPayload(f,e),old.stored);
+});
+test('malformed old pending payload remains uncertain and byte-identical without automatic repair',async t=>{
+ const f=fixture(t),e=f.accept(),old=legacySubmission(f,e,'{not-json');await f.reopen();f.context.push(old.context);
+ await f.delivery.tick();assert.equal(f.inbox.head().state,'uncertain');assert.equal(f.submitted.length,0);assert.equal(storedPayload(f,e),old.stored);
 });

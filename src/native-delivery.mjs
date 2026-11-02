@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { nativeMessage, NATIVE_FORMAT } from './message-format.mjs';
+import { nativeDescription } from './message-preview.mjs';
 
 export const HOST_VERSION = '2.2.5';
 const id = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(value);
@@ -103,7 +104,7 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       inbox.transaction(() => inbox.db.prepare('UPDATE v2_submissions SET promoted=1 WHERE broker_message_id=?').run(outstanding.broker_message_id));
     }
     if (!active() || observedEpoch !== epoch || !await current()) return;
-    const payload = { text: nativeMessage(head.envelope), description: 'Psst agent message', metadata: {
+    const payload = { text: nativeMessage(head.envelope), description: nativeDescription(head.envelope), metadata: {
       source: 'psst', broker_message_id: head.message_id, sender_client_id: head.envelope.sender.client_id, format: NATIVE_FORMAT,
     } };
     const target = { native_id: 'msg_psst_' + randomUUID().replaceAll('-', ''), injection_id: randomUUID(), payload: canonical(payload) };

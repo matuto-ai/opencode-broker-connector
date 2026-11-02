@@ -10,7 +10,7 @@ const root=fileURLToPath(new URL('../',import.meta.url));
 
 test('root npm manifest has one current native server and registry-only production dependency',()=>{
  const pkg=JSON.parse(readFileSync(join(root,'package.json'))),lock=JSON.parse(readFileSync(join(root,'package-lock.json')));
- assert.equal(pkg.name,'@matuto-ai/opencode-broker-connector');assert.equal(pkg.version,'0.5.0');
+ assert.equal(pkg.name,'@matuto-ai/opencode-broker-connector');assert.equal(pkg.version,'0.5.1');
  assert.deepEqual(pkg.exports,{'.':'./plugin/index.mjs','./server':'./plugin/index.mjs'});assert.equal(pkg.main,pkg.exports['.']);
  assert.deepEqual(pkg.dependencies,{zod:'4.1.8'});assert.deepEqual(lock.packages[''].dependencies,pkg.dependencies);
  assert.equal(pkg.bin,undefined);assert.equal(existsSync(join(root,'v2')),false);

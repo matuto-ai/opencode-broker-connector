@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.5.0 (unreleased)
+## 0.5.1 (unreleased)
+
+- Make new native history notices show a bounded literal message preview and external-agent sender label, rather than only “Psst agent message”.
+- Preserve full message bodies, machine provenance, receipt semantics and all existing persisted payloads byte-for-byte.
+
+## 0.5.0
 
 - Correct the root npm package to the sole current native OpenCode plugin, registered as `matuto.psst`. Remove the classic/TUI/owned-run entries and Git-dependent wrapper. Public CLI is `opencode`.
 - Keep CodeMode enabled while registering send/resend as supported direct native tools with individual durable IDs; other broker tools remain in CodeMode.
