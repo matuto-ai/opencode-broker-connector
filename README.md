@@ -1,6 +1,6 @@
 # Psst for OpenCode
 
-**0.5.0 correction candidate — publish this version before using the command below.**
+**0.5.1 history-preview candidate — publish this version before using the command below.**
 One npm package, one current native plugin, registered as **`matuto.psst`**.
 There is no separate product, Git installer, legacy entry or TUI extension.
 
@@ -9,7 +9,7 @@ There is no separate product, Git installer, legacy entry or TUI extension.
 After this version is published:
 
 ```sh
-opencode plugin add @matuto-ai/opencode-broker-connector@0.5.0
+opencode plugin add @matuto-ai/opencode-broker-connector@0.5.1
 ```
 
 For an existing installation, first inspect `opencode plugin list` and remove
@@ -27,7 +27,11 @@ is needed. Startup never enrolls; an already approved installation is reused.
 ## Messages
 
 Incoming messages use the native synthetic queue automatically, without changing
-agent/model selection or the user's draft. There is no manual receive/ack tool.
+agent/model selection or the user's draft. New native history notices include a
+compact literal preview, clearly labeled `Psst · outro agente`, with sender name
+and short ID. Controls and bidi formatting are escaped; long text is truncated.
+The full machine-origin body is unchanged. Existing persisted notices keep their
+original payload, including their old label. There is no manual receive/ack tool.
 Use `broker_list_clients`, `broker_send`, `broker_message_status`,
 `broker_update_metadata`, `broker_sent_history`, `broker_message_content`,
 `broker_resend` and `broker_cancel`. Native tool identity and original timestamp
