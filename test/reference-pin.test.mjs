@@ -7,7 +7,7 @@ import { verifyReference, REFERENCE_COMMIT } from '../src/reference-pin.mjs';
 
 test('exact reviewed reference pin rejects tampered source before import', t => {
   const source = process.env.BROKER_REFERENCE_DIR ?? resolve('../ai-agent-msg-broker');
-  assert.equal(REFERENCE_COMMIT, '2de9cc3758b9fc593f5afca4fc501fd013d416ec');
+  assert.equal(REFERENCE_COMMIT, 'f32ddc79ec7b812062ed3f6de7b9a0c12a7128f3');
   verifyReference(source);
   const directory = mkdtempSync(join(tmpdir(), 'reference-pin-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));

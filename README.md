@@ -1,8 +1,8 @@
 # Psst for OpenCode
 
-**0.6.0 history-preview candidate — publish this version before using the command below.**
+**0.6.0 source candidate — not published yet.**
 One npm package, one current native plugin, registered as **`matuto.psst`**.
-There is no separate product, Git installer, legacy entry or TUI extension.
+The same npm package provides official server and TUI entries. There is no separate installation, Git wrapper or legacy entry.
 
 ## Install or update
 
@@ -25,6 +25,8 @@ unapproved local request. No token, connection-file handoff or host policy chang
 is needed. Startup never enrolls; an already approved installation is reused.
 
 ## Messages
+
+Only the conversation selected in a local TUI receives automatic messages and renews its heartbeat. Home, exit and stale TUI leases suspend transport without closing the identity; reopening reconnects that identity. Multiple CLIs are independent. No TUI signal means offline. See [active-conversation behavior and limits](docs/active-conversation.md).
 
 Incoming messages use the native synthetic queue automatically, without changing
 agent/model selection or the user's draft. New native history notices include a
@@ -102,3 +104,32 @@ MIT. Vendored Psst code keeps its license and exact integrity pins.
 ## Migrating to the Psst package name
 
 Version 0.6.0 uses a new npm package and GitHub repository name. Follow the [migration checklist](docs/migration-0.6.0.md) before publication or upgrading an existing installation. Preserve all private Psst state and do not load both old and new sources.
+
+### Opt-in registration v2 and retained native conversations
+
+Registration remains v1 by default. With a compatible broker, an operator can set
+`broker.registrationVersion: 2` in plain configuration, or `registration_version: 2`
+in an existing `broker-client-bundle-v1` connection file. Only numeric1 or2 is
+accepted. The bundle keeps its enrollment-receipt requirement, credentials and
+paths; do not convert an enrolled bundle into plain configuration to opt in.
+This does not enable server cleanup. The broker's retention/enforcement activation
+is a separate operator decision after all connectors are compatible.
+
+An inactive native conversation resumes the same identity before expiry. After an
+authenticated lookup confirms its own broker session is gone, the connector
+revalidates the exact native conversation and selected state, then creates a fresh
+empty journal and identity. A private atomic `current-incarnation.json` pointer
+selects that generation on reload. Old pending sends, claims, native admissions and
+uncertain operations are never copied or replayed into the new generation. Old
+local journals remain untouched; this is not local-history deletion.
+
+The original root `owner.sqlite` lock remains held across rebuilding and child
+journals, preventing another worker from concurrently adopting the old root.
+Missing/corrupt pointed journals and v1 fallback after a pointer exists fail closed.
+Storage uncertainty stops automatic restoration for that conversation during the
+plugin lifetime; recovery requires a deliberate plugin reload that first reads the
+durable pointer. Never delete journals or change identities to force a retry.
+
+The reviewed SDK also contains two cooperative presence-event tools. This native
+connector intentionally continues exposing its existing eight tools, not those two
+new tools; unknown future SDK catalog changes still fail closed.

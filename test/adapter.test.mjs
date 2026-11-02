@@ -57,7 +57,7 @@ async function fixture(t, { lease = 0, currentBinding, observeMetadata, clientCh
 
 test('native helper exposes eight strict outgoing tools, with no automatic prompt or approval surface', async t => {
   const f = await fixture(t); await f.start();
-  assert.deepEqual(Object.keys(f.adapter.tools).sort(), reference.TOOL_DEFINITIONS.filter(x => x.name !== 'broker_receive').map(x => x.name).sort());
+  assert.deepEqual(Object.keys(f.adapter.tools).sort(), ['broker_list_clients','broker_send','broker_update_metadata','broker_message_status','broker_sent_history','broker_message_content','broker_resend','broker_cancel'].sort());
   assert.equal((await json(f, 'broker_list_clients')).clients.length, 0);
   for (const [name, args] of [['broker_send', { recipient_id: randomUUID(), text: 'x', approval: true }],
     ['broker_list_clients', { limit: 101 }], ['broker_send', { recipient_id: 'display-name', text: 'x' }]]) {

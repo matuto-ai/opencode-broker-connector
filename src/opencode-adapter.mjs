@@ -2,6 +2,13 @@ import { createToolScope } from './tool-scope.mjs';
 import { isAbsolute, normalize } from 'node:path';
 
 const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadata', 'broker_message_status', 'broker_receive', 'broker_sent_history', 'broker_message_content', 'broker_resend', 'broker_cancel'];
+// Reviewed SDK adds two cooperative presence tools. Native OpenCode keeps its
+// existing eight-tool surface; do not accidentally widen it during SDK rollout.
+export function nativeToolDefinitions(definitions) {
+  const known=[...TOOL_NAMES,'broker_presence_events','broker_acknowledge_presence_event'];
+  if(!Array.isArray(definitions)||definitions.length!==known.length||new Set(definitions.map(d=>d.name)).size!==known.length||definitions.some(d=>!known.includes(d.name)))throw new Error('Shared tool catalog changed; review it before enabling this adapter.');
+  return definitions.filter(d=>TOOL_NAMES.includes(d.name));
+}
 const localId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
 const absolute = value => typeof value === 'string' && isAbsolute(value) && normalize(value) === value;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -74,7 +81,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
     || inbox.identity?.client_type !== 'opencode' || client.inbox !== inbox) {
     throw new Error('Invalid adapter configuration: provide a verified exact host binding and shared broker reference objects.');
   }
-  const definitions = reference.TOOL_DEFINITIONS;
+  const definitions = nativeToolDefinitions(reference.TOOL_DEFINITIONS);
   if (definitions.length !== TOOL_NAMES.length || definitions.some(definition => !TOOL_NAMES.includes(definition.name))
     || new Set(definitions.map(definition => definition.name)).size !== TOOL_NAMES.length) {
     throw new Error('Shared tool catalog changed; review it before enabling this adapter.');
@@ -88,7 +95,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
   const identity = Object.freeze({ ...inbox.identity });
   const toolScope = createToolScope({ closedError: () => new reference.LocalError('session_mismatch', { effect: 'unknown' }), abortedError: () => new reference.LocalError('request_aborted') });
   const recoveryAbort = new AbortController();
-  let recoveryPromise;
+  let recoveryPromise, metadataTail = Promise.resolve();
   let started = false, closed = false, startPromise, runtimeStartPromise, stopPromise;
   const diagnostic = code => { try { onDiagnostic({ code }); } catch { /* No raw exception data. */ } };
   function sameIdentity(candidate) {
@@ -103,7 +110,17 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
       && now?.directory === expected.directory && now?.worktree === expected.worktree
       && now?.lifetime === expected.lifetime && now?.signal === expected.signal;
   }
-  const runtime = new reference.AdapterRuntime({ client, inbox,
+  // The generic reference defaults a failed liveness check to terminal close.
+  // Native navigation/unload is resumable, including that internal stop path.
+  class NativeRuntime extends reference.AdapterRuntime {
+    stop(options = { closeSession: closeSessionOnStop }) { return super.stop(options); }
+    async checkAlive() {
+      const wasClosed = this.closed, alive = await super.checkAlive();
+      if (!alive && !wasClosed) diagnostic('native_binding_unavailable');
+      return alive;
+    }
+  }
+  const runtime = new NativeRuntime({ client, inbox,
     verifySession: async candidate => sameIdentity(candidate) && await alive(), isAlive: alive,
     onDiagnostic: entry => diagnostic(entry.code) });
   async function stop() {
@@ -182,7 +199,13 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
           }
           const facade = reference.createTools({ client: scopedClient, inbox, observeMetadata,
             cooperativeBoundary: async read => { await assertBound(context); return read(); } });
-          const result = await reference.invokeTool(facade, definition.name, parsed.data, { ...(operationContext ? operationContext(context) : {}), signal: AbortSignal.any([operationSignal, expected.signal]) });
+          const invoke = async () => { await assertBound(context); return reference.invokeTool(facade, definition.name, parsed.data, { ...(operationContext ? operationContext(context) : {}), signal: AbortSignal.any([operationSignal, expected.signal]) }); };
+          // Observed metadata is CAS-versioned. Serialize only metadata-writing
+          // tools within this exact session; distinct sessions remain independent.
+          let result;
+          if (observeMetadata && ['broker_send', 'broker_update_metadata'].includes(definition.name)) {
+            const pending = metadataTail.then(invoke); metadataTail = pending.catch(() => {}); result = await pending;
+          } else result = await invoke();
           // Unknown/cancelled host results never get repackaged as acceptance.
           // The private outgoing ledger retains any uncertain operation and its key.
           try { await assertBound(context, 'unknown'); }

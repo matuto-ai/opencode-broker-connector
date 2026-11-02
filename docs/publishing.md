@@ -2,7 +2,7 @@
 
 The root npm package is `@matuto-ai/opencode-psst-connector`; the next version
 is **0.6.0**. Both `.` and `./server` resolve to the same native server object.
-No TUI, alternate package, Git source dependency or host installer is included.
+The official ./tui entry is included in that same package. No alternate package, Git source dependency or host installer is included.
 
 The owner publishes the matching GitHub release after review/merge. The release
 workflow verifies tag/package parity, runs tests/package checks, then publishes

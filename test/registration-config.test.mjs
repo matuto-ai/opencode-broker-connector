@@ -1,0 +1,7 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync,writeFileSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';import {readConfig} from '../src/config.mjs';
+test('bundle version opt-in is strict and preserves required enrollment receipt and credential paths',t=>{
+ const dir=mkdtempSync(join(tmpdir(),'oc-v2-config-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));const file=join(dir,'connection.json');
+ const bundle={format:'broker-client-bundle-v1',protocol_version:'1',broker_url:'https://fixture.invalid/',token_file:'token',file_paths_relative_to:'connection_file_directory',authorization_header:'Authorization',authorization_scheme:'Bearer',insecure_development:false,allowed_client_types:['opencode'],scope:'default',enrollment_receipt_file:'enrollment.json'};
+ for(const version of [undefined,1,2]){writeFileSync(file,JSON.stringify({...bundle,...(version===undefined?{}:{registration_version:version})}),{mode:0o600});const result=readConfig(file);assert.equal(result.enrollmentReceiptRequired,true);assert.equal(result.broker.registrationVersion??1,version??1);assert.equal(result.broker.tokenFile,join(dir,'token'));assert.equal(result.stateDirectory,join(dir,'state'));}
+ for(const registration_version of [null,0,3,'2',true]){writeFileSync(file,JSON.stringify({...bundle,registration_version}),{mode:0o600});assert.throws(()=>readConfig(file),/configuration_invalid/);}
+});

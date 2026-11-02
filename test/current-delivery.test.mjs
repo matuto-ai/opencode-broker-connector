@@ -65,7 +65,7 @@ test('bounded stalled host request drains on stop without accepting a late recei
 });
 test('cancellation queued after durable intent but before deferred dispatch prevents the native effect',async t=>{
  const f=fixture(t);f.accept();let cancel=true;f.inbox.failurePoint=point=>{if(point==='after_commit'&&cancel){cancel=false;queueMicrotask(()=>f.delivery.event({type:'session.execution.interrupted',data:{sessionID:'ses_native',reason:'user'}}));}};
- await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'injecting');await f.delivery.tick();assert.equal(f.submitted.length,0);
+ await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'pending');await f.delivery.tick();assert.equal(f.submitted.length,0);
 });
 
 // Seed the exact pre-preview journal shape, before loading the new delivery code.
@@ -95,4 +95,12 @@ test('pre-preview accepted outstanding payload survives reload and gates the nex
 test('malformed old pending payload remains uncertain and byte-identical without automatic repair',async t=>{
  const f=fixture(t),e=f.accept(),old=legacySubmission(f,e,'{not-json');await f.reopen();f.context.push(old.context);
  await f.delivery.tick();assert.equal(f.inbox.head().state,'uncertain');assert.equal(f.submitted.length,0);assert.equal(storedPayload(f,e),old.stored);
+});
+
+test('deselection at actual synthetic boundary defers proven uninvoked work, then resumes exactly once',async t=>{
+ const f=fixture(t);await f.delivery.stop();let selected=true;let flip=true;
+ const delivery=createNativeDelivery({session:f.session,inbox:f.inbox,binding:f.binding,signal:f.controller.signal,verify:async()=>f.info,available:()=>selected});t.after(()=>delivery.stop());
+ f.accept();f.inbox.failurePoint=point=>{if(point==='after_commit'&&flip){flip=false;queueMicrotask(()=>{selected=false;});}};
+ await delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'pending');assert.equal(f.inbox.db.prepare('SELECT count(*) n FROM v2_submissions').get().n,0);
+ selected=true;f.inbox.failurePoint=()=>{};await delivery.tick();assert.equal(f.submitted.length,1);assert.equal(f.inbox.head(),null);
 });
