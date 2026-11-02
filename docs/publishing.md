@@ -1,7 +1,7 @@
 # Publishing the current OpenCode plugin
 
-The root npm package is `@matuto-ai/opencode-broker-connector`; the next version
-is **0.5.1**. Both `.` and `./server` resolve to the same native server object.
+The root npm package is `@matuto-ai/opencode-psst-connector`; the next version
+is **0.6.0**. Both `.` and `./server` resolve to the same native server object.
 No TUI, alternate package, Git source dependency or host installer is included.
 
 The owner publishes the matching GitHub release after review/merge. The release
@@ -12,7 +12,7 @@ release exists. Do not instruct installation of an unpublished version.
 After npm publication is verified, the supported command is:
 
 ```sh
-opencode plugin add @matuto-ai/opencode-broker-connector@0.5.1
+opencode plugin add @matuto-ai/opencode-psst-connector@0.6.0
 ```
 
 Keep current 2.2.5 native-runtime acceptance separate from package-loader tests.

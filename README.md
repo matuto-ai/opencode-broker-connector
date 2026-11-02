@@ -1,6 +1,6 @@
 # Psst for OpenCode
 
-**0.5.1 history-preview candidate — publish this version before using the command below.**
+**0.6.0 history-preview candidate — publish this version before using the command below.**
 One npm package, one current native plugin, registered as **`matuto.psst`**.
 There is no separate product, Git installer, legacy entry or TUI extension.
 
@@ -9,7 +9,7 @@ There is no separate product, Git installer, legacy entry or TUI extension.
 After this version is published:
 
 ```sh
-opencode plugin add @matuto-ai/opencode-broker-connector@0.5.1
+opencode plugin add @matuto-ai/opencode-psst-connector@0.6.0
 ```
 
 For an existing installation, first inspect `opencode plugin list` and remove
@@ -98,3 +98,7 @@ and CI do not install a CLI or model provider. Native/model behavior in the owne
 sandbox is part of the joint pilot, not asserted by package tests.
 
 MIT. Vendored Psst code keeps its license and exact integrity pins.
+
+## Migrating to the Psst package name
+
+Version 0.6.0 uses a new npm package and GitHub repository name. Follow the [migration checklist](docs/migration-0.6.0.md) before publication or upgrading an existing installation. Preserve all private Psst state and do not load both old and new sources.
