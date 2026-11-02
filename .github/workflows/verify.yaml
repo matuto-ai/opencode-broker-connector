@@ -1,0 +1,37 @@
+name: Verify
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.19.0
+      - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
+      - name: Check source syntax
+        run: npm run check
+      - name: Run local tests
+        run: node scripts/test.mjs local
+      - name: Verify native host and protocol integration
+        run: node scripts/test.mjs integration
+      - name: Fetch pinned HTTPS approval test server
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matuto-ai/psst
+          ref: 72f5d2d1b834e02cfb6b2f7dc11c6f1a55729344
+          path: .test-fixtures/psst-approval
+          persist-credentials: false
+      - name: Verify container persistence
+        run: node scripts/container-persistence.mjs
+        env:
+          PSST_APPROVAL_DIR: .test-fixtures/psst-approval
+      - name: Verify installable package
+        run: npm run pack:check
