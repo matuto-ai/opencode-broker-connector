@@ -135,3 +135,7 @@ connector intentionally continues exposing its existing eight tools, not those t
 new tools; unknown future SDK catalog changes still fail closed.
 
 Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
+
+Official OpenCode server/TUI admission and TLS approval run in a dedicated,
+credential-free CI job. See [official-host CI evidence](docs/official-host-ci.md)
+for pinned inputs, local reproduction, and the separate authenticated-model gate.
