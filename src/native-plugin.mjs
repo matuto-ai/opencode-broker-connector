@@ -114,7 +114,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       }
       }
       if (!await valid()) throw new Error('native_session_mismatch');
-      state.delivery = deliveryFactory({ session: ctx.session, inbox: state.inbox, binding: nativeBinding,
+      state.delivery = deliveryFactory({ session: ctx.session, client: state.client, inbox: state.inbox, binding: nativeBinding,
         signal: state.controller.signal, verify: valid, available: () => selected(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
       state.delivery.start();
       return state;

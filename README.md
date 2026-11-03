@@ -133,3 +133,5 @@ durable pointer. Never delete journals or change identities to force a retry.
 The reviewed SDK also contains two cooperative presence-event tools. This native
 connector intentionally continues exposing its existing eight tools, not those two
 new tools; unknown future SDK catalog changes still fail closed.
+
+Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
