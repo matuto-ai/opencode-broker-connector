@@ -170,7 +170,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  const permissionAfter=(await api('/api/session/'+session.id+'/permission',{action:'fixture_sensitive_action',resources:['fixture://requires-human-approval']})).data;assert.equal(permissionAfter.effect,'ask');
  const after=(await api('/api/session/'+session.id)).data;assert.equal(after.agent,'build');assert.equal(after.model.id,'nonexistent');
  const tools=await api('/api/plugin');assert.match(JSON.stringify(tools),/matuto.psst/);
- const restored=(await peer.listClients({})).clients.filter(c=>c.client_type==='opencode');
+ const restored=(await peer.listClients({connected:false})).clients.filter(c=>c.client_type==='opencode');
  assert.equal(restored.length,1,'restart must not register a fresh broker identity');
  assert.equal(restored[0].client_id,originalIdentity);
  assert.deepEqual(bindings().find(b=>b.identity.client_id===originalIdentity),originalBinding);
@@ -180,7 +180,8 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  for(let i=0;i<50&&!reader.selected().has(second.id);i++)await delay(100);
  assert.ok(reader.selected().has(second.id));
  await api('/api/session/'+second.id+'/command',{name:'fixture-connect',text:''});
- let independent;for(let i=0;i<100;i++){independent=(await peer.listClients({})).clients.filter(c=>c.client_type==='opencode');if(independent.length===2)break;await delay(50);}
+ // Identity is independent of transport liveness: the first TUI is now inactive.
+ let independent;for(let i=0;i<100;i++){independent=(await peer.listClients({connected:false})).clients.filter(c=>c.client_type==='opencode');if(independent.length===2)break;await delay(50);}
  assert.equal(independent.length,2,'fresh native session registers independently');
  const secondBinding=bindings().find(b=>b.binding.sessionID===second.id);assert.ok(secondBinding);
  assert.notEqual(secondBinding.identity.client_id,originalIdentity);

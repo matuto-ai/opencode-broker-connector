@@ -300,7 +300,9 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         let active; try { active = presence.selected(); } catch { active = new Set(); diagnostic('native_selection_unavailable'); }
         await Promise.all([...sessions.keys()].filter(id => !active.has(id)).map(id => close(id)));
         if (disposed) return;
-        await setup?.resume(); // A TUI may select the durable owner after server startup. GET-only, never enrollment.
+        // Candidate recovery is independent of a valid working installation.
+        // A corrupt pending flow cannot suppress restoration of its old mailbox.
+        try { await setup?.resume(); } catch { diagnostic('native_setup_restore_unavailable'); }
         const settings = await readCurrentSettings();
         for (const record of readNativeBindings(settings)) {
           const b = record.binding;

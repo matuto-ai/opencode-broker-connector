@@ -175,28 +175,30 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
   }
   async function resume() {
     if (!alive() || beginning || running) return;
-    let pending = readPending(directory);
-    if (!pending || pending.flowId === blockedFlow) return;
-    const saved = await savedOwner(pending);
-    if (!saved || typeof saved.sessionID !== 'string' || saved.flowId !== pending.flowId) { last = { state: 'setup_owner_recovery_required' }; return; }
-    if (owner?.flowId !== saved.flowId) ownerController = new AbortController();
-    owner = saved;
-    const helper = await loadHelper();
-    const result = helper.readApprovalState({ directory, brokerUrl: pending.brokerUrl, clientType: 'opencode' });
-    if (result && pending.requestId && result.requestId !== pending.requestId) { last = { state: 'setup_owner_recovery_required' }; return; }
-    if (!pending.requestId) {
-      if (result?.requestId && result.requestId !== pending.previousRequestId) {
-        updatePending({ directory, flowId: pending.flowId, requestId: result.requestId });
-        pending = { ...pending, requestId: result.requestId };
-      } else {
-        // A crash before helper candidate persistence is not permission for a
-        // startup POST, nor to select the prior approval as the new candidate.
-        updatePending({ directory, flowId: pending.flowId, paused: true });
-        last = { ...publicState(result), state: 'paused' }; return;
+    try {
+      let pending = readPending(directory);
+      if (!pending || pending.flowId === blockedFlow) return;
+      const saved = await savedOwner(pending);
+      if (!saved || typeof saved.sessionID !== 'string' || saved.flowId !== pending.flowId) { last = { state: 'setup_owner_recovery_required' }; return; }
+      if (owner?.flowId !== saved.flowId) ownerController = new AbortController();
+      owner = saved;
+      const helper = await loadHelper();
+      const result = helper.readApprovalState({ directory, brokerUrl: pending.brokerUrl, clientType: 'opencode' });
+      if (result && pending.requestId && result.requestId !== pending.requestId) { last = { state: 'setup_owner_recovery_required' }; return; }
+      if (!pending.requestId) {
+        if (result?.requestId && result.requestId !== pending.previousRequestId) {
+          updatePending({ directory, flowId: pending.flowId, requestId: result.requestId });
+          pending = { ...pending, requestId: result.requestId };
+        } else {
+          // A crash before helper candidate persistence is not permission for a
+          // startup POST, nor to select the prior approval as the new candidate.
+          updatePending({ directory, flowId: pending.flowId, paused: true });
+          last = { ...publicState(result), state: 'paused' }; return;
+        }
       }
-    }
-    remember(result ?? { state: 'pending', requestId: pending.requestId }, pending);
-    if (!pending.paused && pending.requestId && await bound(saved.sessionID)) watch(pending, saved.sessionID);
+      remember(result ?? { state: 'pending', requestId: pending.requestId }, pending);
+      if (!pending.paused && pending.requestId && await bound(saved.sessionID)) watch(pending, saved.sessionID);
+    } catch { last = { state: 'setup_blocked' }; throw new Error('setup_recovery_blocked'); }
   }
   return { invoke, resume, event(event) {
     if (owner?.sessionID === event?.data?.sessionID && ['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {

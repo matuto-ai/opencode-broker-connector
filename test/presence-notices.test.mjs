@@ -8,13 +8,13 @@ import { Inbox, newSessionIdentity } from '../vendor/broker/reference/inbox.mjs'
 import { createNativeDelivery, nativeSessionBinding } from '../src/native-delivery.mjs';
 import { presencePayload } from '../src/presence-notices.mjs';
 const event = () => ({event_id:randomUUID(),type:'recipient_offline',recipient_id:randomUUID(),last_heartbeat_at:'2026-11-01T10:00:00Z',created_at:'2026-11-01T10:10:00Z',observed_at:'2026-11-01T10:11:00Z',presence_state:'disconnected',messages:[{message_id:randomUUID(),delivery_state:'claimed',delivery_uncertain:true}],has_more_messages:false});
-function fixture(t) {
+function fixture(t, { requestTimeout = 30 } = {}) {
  const directory=mkdtempSync(join(tmpdir(),'psst-notice-')),identity=newSessionIdentity('opencode');let inbox=new Inbox({directory,identity});
  const info={id:'ses_test',projectID:'project',location:{directory},time:{created:1}},binding=nativeSessionBinding(info,'host');
  const controller=new AbortController(), submitted=[], context=[],acks=[],polls=[];let clock=0,selected=true,delivery;
  const client={policy:{presence_events:true},events:[event()],presenceEvents:async filters=>{polls.push(filters);return {events:client.events,next_cursor:null};},acknowledgePresenceEvent:async id=>{acks.push(id);return {event_id:id,acknowledged:true};}};
  const session={synthetic:async input=>{submitted.push(input);return {id:input.id,sessionID:input.sessionID,type:'synthetic',delivery:'queue',payload:{text:input.text,description:input.description,metadata:input.metadata}};},context:async()=>context};
- const make=()=>createNativeDelivery({session,inbox,binding,client,signal:controller.signal,verify:async()=>info,available:()=>selected,noticeNow:()=>clock,requestTimeout:30});delivery=make();
+ const make=()=>createNativeDelivery({session,inbox,binding,client,signal:controller.signal,verify:async()=>info,available:()=>selected,noticeNow:()=>clock,requestTimeout});delivery=make();
  t.after(async()=>{controller.abort();await delivery.stop();inbox.close();rmSync(directory,{recursive:true,force:true});});
  return {client,session,submitted,context,acks,polls,info,controller,get inbox(){return inbox;},get delivery(){return delivery;},set selected(value){selected=value;},
  async tick(){clock+=60000;await delivery.tick();},promote(i=0){const p=submitted[i];context.push({id:p.id,type:'synthetic',text:p.text,description:p.description,metadata:p.metadata});},
@@ -59,12 +59,14 @@ test('real HTTP broker offline episode reaches native context once and ACK leave
  const {httpFixture,registration}=await import('./broker-fixture/test/helpers.mjs');
  const {BrokerClient}=await import('../vendor/broker/reference/client.mjs');
  const {writeFileSync}=await import('node:fs');
- const broker=await httpFixture(t),f=fixture(t),tokenFile=join(f.inbox.directory,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});
+ // Real loopback I/O needs a bounded network budget, not the 30ms unit-host
+ // timeout. Exercise ordinary >30ms scheduling latency deterministically.
+ const broker=await httpFixture(t),f=fixture(t,{requestTimeout:2000}),tokenFile=join(f.inbox.directory,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});
  const client=new BrokerClient({url:broker.base,tokenFile,insecureDevelopment:true,inbox:f.inbox,now:()=>broker.now,maxAttempts:1});
  await client.register({name:'Native sender',model:{provider:null,id:null,source:'unknown'},project:null});
  const peer=registration('pi');await broker.request('/v1/sessions',{method:'POST',body:peer});
  const sent=await client.sendPrepared(client.prepareSend({recipient_id:peer.client_id,content:{type:'text/plain',text:'never exposed in notice'}}));
- f.client.policy=client.policy;f.client.presenceEvents=client.presenceEvents.bind(client);f.client.acknowledgePresenceEvent=client.acknowledgePresenceEvent.bind(client);
+ f.client.policy=client.policy;f.client.presenceEvents=async(filters,options)=>{await new Promise(resolve=>setTimeout(resolve,40));return client.presenceEvents(filters,options);};f.client.acknowledgePresenceEvent=client.acknowledgePresenceEvent.bind(client);
  for(let i=0;i<9;i++){broker.advance(60000);await client.heartbeat();}broker.advance(59999);await client.heartbeat();await f.tick();assert.equal(f.submitted.length,0);
  broker.advance(1);await f.tick();assert.equal(f.submitted.length,1);assert.doesNotMatch(f.submitted[0].text,/never exposed in notice/);
  const before=await client.presenceEvents();assert.equal(before.events.length,1);assert.equal(before.events[0].messages[0].message_id,sent.message_id);
