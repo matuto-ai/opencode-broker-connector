@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -20,7 +20,7 @@ jobs:
         run: npm run check
       - name: Run local tests
         run: node scripts/test.mjs local
-      - name: Verify native host and protocol integration
+      - name: Verify SDK and protocol integration
         run: node scripts/test.mjs integration
       - name: Fetch pinned HTTPS approval test server
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -35,3 +35,49 @@ jobs:
           PSST_APPROVAL_DIR: .test-fixtures/psst-approval
       - name: Verify installable package
         run: npm run pack:check
+  official-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.19.0
+      - name: Install only packed-plugin runtime dependencies
+        run: npm ci --ignore-scripts --omit=dev --omit=peer --no-audit --no-fund
+      - name: Fetch pinned HTTPS approval test server
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matuto-ai/psst
+          ref: 72f5d2d1b834e02cfb6b2f7dc11c6f1a55729344
+          path: .test-fixtures/psst-approval
+          persist-credentials: false
+      - name: Download and verify official OpenCode 2.2.5
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/opencode-host"
+          cd "$RUNNER_TEMP/opencode-host"
+          curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 --connect-timeout 10 --max-time 60 \
+            https://github.com/anomalyco/opencode/releases/download/v2.2.5/opencode-linux-x64.tar.gz \
+            --output opencode-linux-x64.tar.gz
+          echo '09f44302c10fd036912f59c81fd1aef5df45dd06f649197f9dfc9bbe2a79614e  opencode-linux-x64.tar.gz' | sha256sum --check --strict
+          tar --extract --gzip --file opencode-linux-x64.tar.gz opencode
+      - name: Verify real server and TUI admission with TLS approval
+        run: node scripts/test.mjs host
+        env:
+          OPENCODE_BINARY: ${{ runner.temp }}/opencode-host/opencode
+          PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-fixtures/psst-approval
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    needs: [checks, official-host]
+    if: ${{ always() }}
+    steps:
+      - name: Require both verification jobs to pass
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          HOST_RESULT: ${{ needs.official-host.result }}
+        run: test "$CHECKS_RESULT" = success && test "$HOST_RESULT" = success

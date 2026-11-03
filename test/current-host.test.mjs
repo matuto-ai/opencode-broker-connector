@@ -13,18 +13,24 @@ import { createBrokerServer } from './broker-fixture/src/server.mjs';
 import { createPresenceReader, presenceDirectory } from '../src/active-presence.mjs';
 import { loadBrokerReference } from '../src/reference.mjs';
 
+import { stopHostProcess } from './host-process.mjs';
+
 for (const approval of [false, true]) test(approval ? 'official OpenCode URL-only native setup awaits real TLS admin approval before automatic delivery' : 'official OpenCode loads packed root native plugin and automatically admits broker message without changing selection',
  {skip:!process.env.OPENCODE_BINARY || approval && !process.env.PSST_APPROVAL_BROKER_DIR,timeout:60000},async t=>{
- const dir=mkdtempSync(join(tmpdir(),'psst-native-host-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
+ // Stop native processes before their broker/database and private directories.
+ // Run every cleanup even after an assertion or another cleanup fails.
+ const cleanups=[],fixtureContext={after:fn=>cleanups.push(fn)};
+ t.after(async()=>{const errors=[];for(const cleanup of cleanups.reverse())try{await cleanup();}catch(error){errors.push(error);}if(errors.length)throw new AggregateError(errors,'native_host_cleanup_failed');});
+ const dir=mkdtempSync(join(tmpdir(),'psst-native-host-'));fixtureContext.after(()=>rmSync(dir,{recursive:true,force:true}));
  const packed=spawnSync('npm',['pack','--json','--ignore-scripts','--pack-destination',dir,'--cache',join(dir,'npm-cache')],{encoding:'utf8',cwd:fileURLToPath(new URL('../',import.meta.url))});assert.equal(packed.status,0,packed.stderr);
  const tar=spawnSync('tar',['-xzf',join(dir,JSON.parse(packed.stdout)[0].filename),'-C',dir],{encoding:'utf8'});assert.equal(tar.status,0,tar.stderr);
  symlinkSync(fileURLToPath(new URL('../node_modules',import.meta.url)),join(dir,'package','node_modules'));
  const key=join(dir,'tls.key');let cert=join(dir,'tls.crt');
  const ssl=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=IP:127.0.0.1'],{encoding:'utf8'});assert.equal(ssl.status,0,ssl.stderr);
- const authority=approval ? await (await import(pathToFileURL(join(process.env.PSST_APPROVAL_BROKER_DIR,'test','approval-tls-fixture.mjs')).href)).approvalTlsFixture(t) : null;
- const f=approval ? null : fixture(t),app=approval ? null : createBrokerServer({store:f.store,auth:f.auth,host:'127.0.0.1',port:0,tls:{keyFile:key,certFile:cert},pollIntervalMs:10});
- const address=app ? await app.listen() : null;if(app)t.after(()=>app.close());const url=authority?.brokerUrl ?? `https://127.0.0.1:${address.port}/`;if(authority)cert=authority.certFile;
- const ref=await loadBrokerReference(),peerInbox=new ref.Inbox({directory:join(dir,'peer'),identity:ref.newSessionIdentity('pi')});t.after(()=>peerInbox.close());
+ const authority=approval ? await (await import(pathToFileURL(join(process.env.PSST_APPROVAL_BROKER_DIR,'test','approval-tls-fixture.mjs')).href)).approvalTlsFixture(fixtureContext) : null;
+ const f=approval ? null : fixture(fixtureContext),app=approval ? null : createBrokerServer({store:f.store,auth:f.auth,host:'127.0.0.1',port:0,tls:{keyFile:key,certFile:cert},pollIntervalMs:10});
+ const address=app ? await app.listen() : null;if(app)fixtureContext.after(()=>app.close());const url=authority?.brokerUrl ?? `https://127.0.0.1:${address.port}/`;if(authority)cert=authority.certFile;
+ const ref=await loadBrokerReference(),peerInbox=new ref.Inbox({directory:join(dir,'peer'),identity:ref.newSessionIdentity('pi')});fixtureContext.after(()=>peerInbox.close());
  const peerToken=join(dir,'peer.token'),token=join(dir,'token');if(authority){ const opts={brokerUrl:url,directory:join(dir,'peer-installation'),clientType:'pi'};const p=await authority.helper('beginApproval',opts);await authority.decide(p.requestId);const a=await authority.helper('pollApproval',opts);writeFileSync(peerToken,readFileSync(join(a.connectionFile,'..','token')),{mode:0o600}); }else{writeFileSync(peerToken,f.a.token,{mode:0o600});writeFileSync(token,f.b.token,{mode:0o600});}
  const peer=new ref.BrokerClient({url,tokenFile:peerToken,caFile:cert,inbox:peerInbox,maxAttempts:1});await peer.register({name:'Fixture peer',model:{provider:null,id:null,source:'unknown'},project:null});
  const configPath=join(dir,'connection.json');writeFileSync(configPath,JSON.stringify({broker:{url,tokenFile:token,caFile:cert},stateDirectory:join(dir,'state'),name:'OpenCode fixture'}),{mode:0o600});
@@ -39,7 +45,7 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode URL-onl
  const port=await new Promise((resolve,reject)=>{const s=createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const port=s.address().port;s.close(()=>resolve(port));});});
  const child=spawn(process.env.OPENCODE_BINARY,['--log-level','debug','--print-logs','serve','--hostname','127.0.0.1','--port',String(port)],{cwd:project,env:{PATH:process.env.PATH,HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert},stdio:['ignore','pipe','pipe']});
  let output='';child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);
- t.after(async()=>{child.kill('SIGTERM');await Promise.race([new Promise(r=>child.once('exit',r)),delay(2000).then(()=>child.kill('SIGKILL'))]);});
+ fixtureContext.after(()=>stopHostProcess(child));
  const base=`http://127.0.0.1:${port}`;
  async function api(path,body,method=body?'POST':'GET'){const r=await fetch(base+path,{method,headers:{'content-type':'application/json',authorization:'Basic '+Buffer.from('opencode:'+password).toString('base64')},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(5000)});assert.ok(r.ok,`${path}: ${r.status} ${await r.clone().text()}`);return r.status===204?null:r.json();}
  for(let i=0;i<100;i++){try{if((await api('/api/info')).version==='2.2.5')break;}catch{}if(i===99)assert.fail('OpenCode did not start: '+output.replaceAll(password,'[fixture-secret]'));await delay(100);}
@@ -47,8 +53,18 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode URL-onl
  const session=(await api('/api/session',{location:{directory:project},title:'Psst OpenCode fixture',agent:'plan',model:{providerID:'fixture',id:'nonexistent'}})).data;
  // Mount the actual pinned TUI in a PTY. No model credentials or permission flags.
  const quote=s=>"'"+s.replaceAll("'", "'\\''")+"'";
- const tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; exec ${quote(process.env.OPENCODE_BINARY)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:{PATH:process.env.PATH,TERM:'xterm-256color',HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert},detached:true,stdio:['pipe','pipe','pipe']});
- let tuiOutput='';tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});t.after(async()=>{try{process.kill(-tui.pid,'SIGTERM');}catch{}await Promise.race([new Promise(r=>tui.once('exit',r)),delay(1000)]);tui.stdin.destroy();tui.stdout.destroy();tui.stderr.destroy();});
+ const tuiPidFile=join(dir,'tui.pid');
+ const tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(process.env.OPENCODE_BINARY)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:{PATH:process.env.PATH,TERM:'xterm-256color',HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert},detached:true,stdio:['pipe','pipe','pipe']});
+ let tuiOutput='';tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});fixtureContext.after(async()=>{
+  // Give util-linux script its own two-second child-session shutdown window.
+  await stopHostProcess(tui,true,3000);
+  const pid=Number(readFileSync(tuiPidFile,'utf8').trim());assert.ok(Number.isInteger(pid)&&pid>0);
+  // util-linux script owns another session for the shell/TUI. Verify that the
+  // actual native process also exited, not only the PTY recorder's leader.
+  const alive=()=>{try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');return !['Z','X'].includes(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]);}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+  for(let i=0;i<100&&alive();i++)await delay(10);
+  assert.equal(alive(),false,'actual native TUI must stop with its PTY recorder');
+ });
  let reader;for(let i=0;i<150;i++){try{reader=createPresenceReader({directory:presenceDirectory(join(dir,'installation'),{directory:project})});if(reader.selected().has(session.id))break;}catch{}await delay(100);}
  assert.ok(reader?.selected().has(session.id),'mounted official TUI must emit selected-session lease: '+tuiOutput.replaceAll(password,'[fixture-secret]'));
  if(!authority)await api('/api/session/'+session.id+'/command',{name:'fixture-connect',text:''});
