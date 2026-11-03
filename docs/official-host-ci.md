@@ -39,7 +39,9 @@ tests then run against the official server and its actual TUI in a PTY:
    replacement, preservation of the working authorization and admin revocation
    without automatic re-enrollment.
 
-Both tests restart the actual server and TUI with the documented private/native
+The approval case also restarts while its exact request is pending and approves
+it before the TUI reconnects, proving selection recovery resumes without another
+enrollment. Both tests restart the actual server and TUI with the documented private/native
 roots, retain the exact native conversation and broker identity, recover unread
 broker delivery and give a fresh conversation an independent address. They also
 retain queued native human input, leave a native permission request unapproved,

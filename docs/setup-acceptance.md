@@ -18,6 +18,9 @@ Missing configuration never starts enrollment. Pending retries retain the same
 candidate and request, including uncertain network results. Private candidate
 persistence precedes the first enrollment POST. Restart only reads or polls an
 already durable request; it cannot generate a request or rotate credentials.
+If the server starts before the owner TUI, selecting that exact owner later
+resumes GET-only polling. Fatal poll, attachment or selection failures pause the
+flow; selection changes alone cannot retry them. Explicit setup is required.
 
 ## Replacement and recovery
 

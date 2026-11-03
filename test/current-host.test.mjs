@@ -103,7 +103,16 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
    const replacement=await rpc('setup',{broker_url:url,replacement_confirmed:true,replacement_request_id:result.request_id});
    assert.equal(replacement.state,'pending');assert.notEqual(replacement.request_id,result.request_id);enrollmentID=replacement.request_id;
    assert.equal((await peer.listClients({})).clients.filter(c=>c.client_type==='opencode').length,0,'denied and replacement-pending requests grant no connection');
+   // Server may restart before the owner TUI reconnects. Restoring selection
+   // must resume this exact pending approval with GET only, not require setup.
+   const beforePendingRestart=authority.approval.list().length;
+   await stopTui();await stopHostProcess(child);rmSync(rpcFile,{force:true});
+   startServer();await waitServer();
    await authority.decide(replacement.request_id);approvedEnrollmentID=replacement.request_id;
+   await delay(700);assert.equal((await peer.listClients({})).clients.filter(c=>c.client_type==='opencode').length,0,'unselected pending owner cannot activate');
+   startTui();for(let i=0;i<150&&!reader.selected().has(session.id);i++)await delay(100);
+   assert.ok(reader.selected().has(session.id));
+   assert.equal(authority.approval.list().length,beforePendingRestart,'pending restart cannot create a new enrollment');
  }
  let recipient;
  for(let i=0;i<180;i++){recipient=(await peer.listClients({})).clients.find(c=>c.client_type==='opencode');if(recipient)break;await delay(50);}
@@ -171,7 +180,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  for(let i=0;i<50&&!reader.selected().has(second.id);i++)await delay(100);
  assert.ok(reader.selected().has(second.id));
  await api('/api/session/'+second.id+'/command',{name:'fixture-connect',text:''});
- const independent=(await peer.listClients({})).clients.filter(c=>c.client_type==='opencode');
+ let independent;for(let i=0;i<100;i++){independent=(await peer.listClients({})).clients.filter(c=>c.client_type==='opencode');if(independent.length===2)break;await delay(50);}
  assert.equal(independent.length,2,'fresh native session registers independently');
  const secondBinding=bindings().find(b=>b.binding.sessionID===second.id);assert.ok(secondBinding);
  assert.notEqual(secondBinding.identity.client_id,originalIdentity);

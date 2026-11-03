@@ -131,3 +131,20 @@ test('terminal paused setup permits explicit replacement from another verified n
  await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);assert.equal(readPending(f.directory).paused,true);
  const second={...f.context,sessionID:'two',confirmedReplacement:true,replacementRequestId:'first'};const result=await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},second);assert.equal(result.request_id,'second');assert.equal(readPending(f.directory).owner.sessionID,'two');
 });
+
+test('pending owner selected after startup resumes with GET only and paused owner stays paused',async t=>{
+ let saved={state:'pending',requestId:'same-request'};const f=await fixture(t,{readApprovalState:()=>saved,pollApproval:async()=>{f.calls.push('poll');return saved;}});await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.stop();f.calls.length=0;let selected=false;
+ const next=createNativeSetup({...f.options,verify:async id=>selected?f.options.verify(id):null});t.after(()=>next.stop());await next.resume();await delay(20);assert.deepEqual(f.calls,[]);
+ selected=true;saved={state:'approved',requestId:'same-request',connectionFile:'/candidate'};await next.resume();await delay(20);assert.ok(f.calls.includes('poll'));assert.ok(f.calls.includes('select'));assert.equal(f.calls.includes('begin'),false);
+ await next.invoke('broker_cancel_setup',{},f.context);await next.stop();f.calls.length=0;const paused=createNativeSetup(f.options);t.after(()=>paused.stop());await paused.resume();await delay(20);assert.deepEqual(f.calls,[]);
+});
+
+test('selection recovery never automatically retries fatal poll or candidate activation failure',async t=>{
+ for(const failure of ['poll','activation']) {
+  let saved={state:'pending',requestId:'same-request'},polls=0,activations=0;
+  const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async()=>saved,pollApproval:async()=>{polls++;if(failure==='poll')throw Error('invalid_response');return saved;}});await f.setup.stop();
+  const setup=createNativeSetup({...f.options,activate:async()=>{activations++;throw Error('psst_selection_changed');}});t.after(()=>setup.stop());await setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);saved={state:'approved',requestId:'same-request',connectionFile:'/candidate'};await delay(30);
+  assert.equal(readPending(f.directory).paused,true);const before={polls,activations};for(let i=0;i<5;i++){await setup.resume();await delay(15);}assert.deepEqual({polls,activations},before);
+  if(failure==='activation'){await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context));assert.equal(activations,before.activations+1,'only explicit setup retries attachment');}
+ }
+});

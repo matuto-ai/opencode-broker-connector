@@ -196,7 +196,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       client_id: state?.client?.inbox?.identity?.client_id ?? null,
       last_delivery_status: state?.deliveryStatus ?? null, receipt_semantics: 'durable_native_admission_not_model_read' };
   };
-  if (setupEnabled) setup = createNativeSetup({ storage: ctx.storage, verify: async id => { try { return selected(id) ? await getInfo(id) : null; } catch { return null; } }, connect, activate, status, signal: controller.signal, ...setupOptions });
+  if (setupEnabled) setup = createNativeSetup({ storage: ctx.storage, verify: async id => { try { if (!selected(id)) return null; const info = await getInfo(id); return selected(id) ? info : null; } catch { return null; } }, connect, activate, status, signal: controller.signal, ...setupOptions });
   try {
     if (setup && ctx.rpc?.register) {
       const invoke = async (name, input, rpcContext) => {
@@ -300,6 +300,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         let active; try { active = presence.selected(); } catch { active = new Set(); diagnostic('native_selection_unavailable'); }
         await Promise.all([...sessions.keys()].filter(id => !active.has(id)).map(id => close(id)));
         if (disposed) return;
+        await setup?.resume(); // A TUI may select the durable owner after server startup. GET-only, never enrollment.
         const settings = await readCurrentSettings();
         for (const record of readNativeBindings(settings)) {
           const b = record.binding;

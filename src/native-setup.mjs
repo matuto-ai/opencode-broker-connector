@@ -27,7 +27,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
   loadHelper = loadApprovalHelper, select = selectInstallation, pollMs = 2000 }) {
   if (!Number.isSafeInteger(pollMs) || pollMs < 10) throw new Error('setup_interval_invalid');
   const scope = createToolScope(), lifetime = new AbortController();
-  let running, owner, ownerController = new AbortController(), beginning = false, beginningController, beginningSessionID, last = { state: 'setup_needed' }, stopped = false;
+  let running, owner, blockedFlow, ownerController = new AbortController(), beginning = false, beginningController, beginningSessionID, last = { state: 'setup_needed' }, stopped = false;
   const alive = () => !stopped && !signal.aborted && !lifetime.signal.aborted;
   const binding = info => canonical({ id: info.id, projectID: info.projectID, location: info.location, created: info.time.created });
   const bound = async id => {
@@ -38,6 +38,12 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
   const savedOwner = async pending => pending?.owner ? { ...pending.owner, flowId: pending.flowId } : await storage.get('psst-v2-setup-owner');
   async function pauseOwned() {
     if (owner) updatePending({ directory, flowId: owner.flowId, paused: true });
+  }
+  function block(pending) {
+    blockedFlow = pending.flowId;
+    // Keep the in-memory fence even when storage itself is the fatal failure.
+    try { updatePending({ directory, flowId: pending.flowId, paused: true }); } catch {}
+    last = { ...last, state: 'setup_blocked' };
   }
   function remember(result, pending) {
     last = publicState(result);
@@ -79,12 +85,12 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
           if (result.state !== 'pending') return;
         } catch (error) {
           if (flowController.signal.aborted) return;
-          if (!error.retryable) { last = { ...last, state: 'setup_blocked' }; return; }
+          if (!error.retryable) { block(pending); return; }
           waitMs = Math.min(300000, Math.max(pollMs, error.retryAfterMs || pollMs));
         }
         await delay(waitMs, undefined, { signal: AbortSignal.any([signal, lifetime.signal, flowController.signal]) }).catch(() => {});
       }
-    })().catch(() => { if (!flowController.signal.aborted) last = { ...last, state: 'setup_blocked' }; }).finally(() => { if (running === task) running = null; });
+    })().catch(() => { if (!flowController.signal.aborted) block(pending); }).finally(() => { if (running === task) running = null; });
     running = task;
   }
   function origin(value) {
@@ -152,7 +158,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
           if (saved?.requestId) {
             updatePending({ directory, flowId: pending.flowId, requestId: saved.requestId }); remember(saved);
             if (error.retryable && await bound(context.sessionID) && !cancelled()) watch({ ...pending, requestId: saved.requestId }, context.sessionID);
-            else if (!await bound(context.sessionID) || cancelled()) await pauseOwned();
+            else if (!error.retryable || !await bound(context.sessionID) || cancelled()) await pauseOwned();
           }
           throw error;
         }
@@ -160,17 +166,20 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         updatePending({ directory, flowId: pending.flowId, requestId: result.requestId });
         const current = { ...pending, requestId: result.requestId };
         if (!await bound(context.sessionID) || cancelled()) { await pauseOwned(); return { state: 'paused', request_id: result.requestId }; }
-        await finish(result, current, context.sessionID, operationSignal, flowController);
+        try { await finish(result, current, context.sessionID, operationSignal, flowController); }
+        catch (error) { if (!error.retryable) block(current); throw error; }
         if (result.state === 'pending') watch(current, context.sessionID);
         return { ...publicState(result), ...status(context.sessionID) };
       }); } finally { beginning = false; beginningController = undefined; beginningSessionID = undefined; }
     }, context?.signal);
   }
   async function resume() {
+    if (!alive() || beginning || running) return;
     let pending = readPending(directory);
-    if (!pending) return;
+    if (!pending || pending.flowId === blockedFlow) return;
     const saved = await savedOwner(pending);
     if (!saved || typeof saved.sessionID !== 'string' || saved.flowId !== pending.flowId) { last = { state: 'setup_owner_recovery_required' }; return; }
+    if (owner?.flowId !== saved.flowId) ownerController = new AbortController();
     owner = saved;
     const helper = await loadHelper();
     const result = helper.readApprovalState({ directory, brokerUrl: pending.brokerUrl, clientType: 'opencode' });
