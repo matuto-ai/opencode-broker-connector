@@ -1,3 +1,4 @@
+import { createPresenceNotices } from './presence-notices.mjs';
 import { randomUUID } from 'node:crypto';
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { nativeMessage, NATIVE_FORMAT } from './message-format.mjs';
@@ -17,7 +18,7 @@ export function nativeSessionBinding(info, hostID) {
  * A successful receipt means durable native admission, NOT model consumption.
  * No mutation retry: native cancellation removes its idempotency lookup row.
  */
-export function createNativeDelivery({ session, inbox, binding, signal, verify, available = () => true, interval = 250,
+export function createNativeDelivery({ session, inbox, binding, signal, verify, client, noticeNow, available = () => true, interval = 250,
   requestTimeout = 2000, onDiagnostic = () => {} }) {
   if (!session || ['synthetic', 'context'].some(key => typeof session[key] !== 'function')
     || !(signal instanceof AbortSignal) || typeof verify !== 'function' || typeof available !== 'function' || !id(binding?.sessionID)
@@ -138,9 +139,17 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       else diagnostic('native_admission_uncertain');
     }
   }
+  const notices = client ? createPresenceNotices({ client, inbox, session, binding, diagnostic, now: noticeNow,
+    call: (method, input) => { const observedEpoch = epoch;
+      return call(method, input, () => active() && epoch === observedEpoch && !getState('v2_paused')); },
+    permitted: async () => {
+      const info = await current();
+      return !!info && !getState('v2_paused') && !(['interrupted', 'failed'].includes(info.outcome)
+        && (info.time.idle ?? 0) >= (info.time.busy ?? 0));
+    } }) : null;
   function tick() {
     if (!active() || running) return running;
-    running = Promise.resolve().then(deliver).catch(() => diagnostic('native_delivery_paused')).finally(() => { running = null; });
+    running = Promise.resolve().then(deliver).then(() => notices?.tick()).catch(() => diagnostic('native_delivery_paused')).finally(() => { running = null; });
     return running;
   }
   return {
