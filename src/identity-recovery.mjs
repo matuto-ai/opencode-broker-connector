@@ -36,7 +36,7 @@ export async function recoverHostAnchor({storage,session,settings,directory,work
   // Shared approved installations may hold mailboxes belonging to other native
   // hosts. An existing anchor is not replaced based on unrelated manifests.
   if(saved!==undefined)return saved;
-  if(!records.length){
+  async function freshAnchor(){
     let names=[];
     try{if(settings)names=readdirSync(settings.stateDirectory);}catch(error){if(error.code!=='ENOENT')throw error;}
     for(const name of names.filter(n=>n.startsWith('opencode-')&&!n.startsWith('opencode-v2-'))){
@@ -53,7 +53,7 @@ export async function recoverHostAnchor({storage,session,settings,directory,work
   const candidates=records.filter(r=>r.binding.location.directory===directory
     && r.binding.location.workspaceID===workspaceID);
   const anchors=new Set(),deadline=Date.now()+5000;
-  let index=0,incomplete=false;
+  let index=0,incomplete=false,unproven=false;
   await Promise.all(Array.from({length:Math.min(4,candidates.length)},async()=>{
     while(index<candidates.length){
       const record=candidates[index++],remaining=deadline-Date.now();
@@ -68,13 +68,21 @@ export async function recoverHostAnchor({storage,session,settings,directory,work
         if(error?._tag!=='SessionNotFoundError'||error.sessionID!==record.binding.sessionID){incomplete=true;return;}
         continue;
       }finally{if(listener)signal.removeEventListener('abort',listener);}
-      if(!info||info.parentID||info.time?.archived)continue;
-      try{if(canonical(nativeSessionBinding(info,record.binding.hostID))===canonical(record.binding))anchors.add(record.binding.hostID);}catch{}
+      // A successful lookup with a changed or unusable live binding is not
+      // absence. It must not authorize a fresh anchor or partial recovery.
+      if(!info||info.parentID||info.time?.archived){unproven=true;continue;}
+      try{
+        if(canonical(nativeSessionBinding(info,record.binding.hostID))===canonical(record.binding))anchors.add(record.binding.hostID);
+        else unproven=true;
+      }catch{unproven=true;}
     }
   }));
   if(incomplete)throw new Error('identity_recovery_incomplete');
   if(anchors.size>1)throw new Error('identity_recovery_ambiguous');
-  if(anchors.size!==1)throw new Error('identity_recovery_required');
+  if(unproven)throw new Error('identity_recovery_required');
+  // No candidate, or every candidate positively absent in this native store:
+  // allocate an independent host without adopting or changing old mailboxes.
+  if(!anchors.size)return freshAnchor();
   const [hostID]=anchors;
   await storage.set('psst-v2-host-id',hostID);
   return hostID;

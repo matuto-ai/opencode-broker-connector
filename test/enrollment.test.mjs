@@ -36,3 +36,12 @@ test('enrollment marker requires exact basename and fatal receipt type/origin/to
  for(const patch of [{client_type:'pi'},{broker_url:'https://other.example'},{token_sha256:'0'.repeat(64)}]){writeFileSync(receiptPath,JSON.stringify({...receipt,...patch}));await assert.rejects(load(bundlePath,{clientType:'opencode',sessionID:'ses_one'}),{code:'invalid_enrollment_receipt'});}
  writeFileSync(receiptPath,JSON.stringify(receipt));writeFileSync(bundlePath,JSON.stringify({...bundle,enrollment_receipt_file:'../enrollment.json'}));await assert.rejects(load(bundlePath,{clientType:'opencode',sessionID:'ses_one'}));
 });
+
+test('expired authorization allows validated identity-only inspection, never connection or corrupt-receipt recovery',async t=>{
+ const f=fixture(t);const api={...helper,connectPairingFile:input=>helper.connectPairingFile(input,{transport:async()=>({status:201,body:{protocol_version:'1',credential_id:'enrolled-'+randomUUID(),adapter_id:'installation-'+randomUUID(),client_type:'opencode',scopes:['psst'],expires_at:new Date(Date.now()+3600000).toISOString()}})})};
+ const load=createConnectionLoader({directory:f.root,stateHome:join(f.root,'state'),loadHelper:async()=>api});const config=await load(f.pairingFile,{clientType:'opencode',sessionID:'ses_one'}),base=dirname(config.broker.tokenFile),bundle=join(base,'connection.json'),path=join(base,'enrollment.json');
+ const expired={...JSON.parse(readFileSync(path,'utf8')),expires_at:new Date(Date.now()-1000).toISOString()};writeFileSync(path,JSON.stringify(expired));
+ await assert.rejects(readExistingConnection(bundle),{code:'credential_expired'});const recovered=await readExistingConnection(bundle,{identityRecovery:true});assert.equal(recovered.authorizationExpired,true);assert.equal(recovered.enrollment,undefined);assert.equal(recovered.stateDirectory,config.stateDirectory);
+ for(const patch of [{client_type:'pi'},{broker_url:'https://wrong.example'},{token_sha256:'0'.repeat(64)}]){writeFileSync(path,JSON.stringify({...expired,...patch}));await assert.rejects(readExistingConnection(bundle,{identityRecovery:true}),{code:'invalid_enrollment_receipt'});}
+ rmSync(path);await assert.rejects(readExistingConnection(bundle,{identityRecovery:true}),{code:'invalid_enrollment_receipt'});
+});

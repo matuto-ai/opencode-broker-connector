@@ -12,7 +12,7 @@ export default {
     const reference = await loadBrokerReference();
     const connectionFile = ctx.options?.connectionFile ?? process.env.PSST_CONFIG_FILE;
     const runtime = await setupNativePlugin({ ctx, reference, tool, metadataOptions: ctx.options ?? {}, setupEnabled: !connectionFile,
-      loadSettings: () => connectionFile ? readExistingConnection(connectionFile) : readInstallation() });
+      loadSettings: readOptions => connectionFile ? readExistingConnection(connectionFile, readOptions) : readInstallation(undefined, readOptions) });
     return runtime.dispose;
   },
 };

@@ -27,14 +27,14 @@ const stored=new Map();
 const hostID=await recoverHostAnchor({settings,directory:'/project',storage:{get:async k=>stored.get(k),set:async(k,v)=>stored.set(k,v)},session:{get:async({sessionID})=>info(sessionID)}});
 const sessions=[];
 try{
- for(const id of ['sender','receiver','unrelated']){
+ for(const id of ['sender','receiver',...Array.from({length:28},(_,i)=>'unrelated-'+i)]){
   const binding=nativeSessionBinding(info(id),hostID),inbox=openNativeInbox({reference,settings,binding});
   const client=new reference.BrokerClient({...settings.broker,inbox});
-  const metadata={name:id,model:{provider:null,id:null,source:'unknown'},project:null};
+  const metadata={name:'Same display name',model:{provider:null,id:null,source:'unknown'},project:null};
   if(phase===1)await client.register(metadata); else await client.reconnect({verifySession:async()=>true,metadata,receiveEnabled:true});
   sessions.push({binding,inbox,client});
  }
- assert.equal(new Set(sessions.map(s=>s.inbox.identity.client_id)).size,3);
+ assert.equal(new Set(sessions.map(s=>s.inbox.identity.client_id)).size,30);
  const [sender,receiver,unrelated]=sessions;
  if(phase===1){
   const key=sender.client.prepareSend({recipient_id:receiver.inbox.identity.client_id,content:{type:'text/plain',text:'durable OpenCode container message'}});
@@ -46,7 +46,7 @@ try{
  }
  const proof=JSON.parse(readFileSync(join(persist,'proof.json'),'utf8'));
  assert.deepEqual(sessions.map(s=>s.inbox.identity.client_id),proof.clients); assert.equal(hostID,proof.hostID);
- assert.equal(unrelated.inbox.head(),null); assert.equal(await unrelated.client.claim(0),null);
+ for(const isolated of sessions.slice(2)){assert.equal(isolated.inbox.head(),null);assert.equal(await isolated.client.claim(0),null);}
  let submissions=0;
  if(phase===2){assert.equal(receiver.inbox.head().envelope.message_id,proof.messageId);}
  if(phase>=2){

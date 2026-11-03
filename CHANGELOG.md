@@ -6,6 +6,11 @@ Publish the connector under `@matuto-ai/opencode-psst-connector` and rename the 
 
 ## Unreleased
 
+- Add native URL-only setup/status/cancel dialogs, exact-request replacement confirmation, durable owner/status recovery and cancellation/CAS fencing.
+- Attach approved replacement before selecting it while retaining the previous working authorization and private journals; preserve strict identity recovery for expired authorization so setup can repair it.
+- Permit conclusively fresh native hosts to share installation authorization without adopting another mailbox; verify 30 same-name sessions and pinned previous-source upgrade.
+- Expand official-host acceptance with native restart, unread delivery, independent sessions, pending replacement and native input/permission preservation. Authenticated model qualification remains explicit and separate.
+
 - Limit receive and heartbeat to selected local TUI conversations, resuming the same identity without closing inactive sessions.
 - Add exact native model and bounded configured project metadata; keep immutable retry payloads.
 - Add explicit registration-v2 opt-in and confirmed-expiry incarnation recovery; preserve old journals and block uncertain storage. Broker retention remains a separate opt-in.

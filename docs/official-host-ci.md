@@ -29,20 +29,31 @@ and a readable `PSST_APPROVAL_BROKER_DIR/test/approval-tls-fixture.mjs`. Missing
 prerequisites fail the stage before test execution. Both existing `current-host`
 tests then run against the official server and its actual TUI in a PTY:
 
-1. The freshly packed root plugin is loaded by the native plugin manager. The
+1. The freshly packed root plugin loads through the native plugin manager. The
    selected conversation obtains its TUI lease, an inactive conversation is not
    woken, and restoring selection automatically admits a real broker message to
    native synthetic inbox/context without changing the selected agent or model.
-2. Explicit URL-only setup creates a pending request, with no OpenCode broker
-   connection before approval. Real local TLS admin approval permits native
-   registration and the same automatic admission path.
+2. Actual keyboard `/psst-setup` opens one broker-URL text field in the official
+   TUI. No native connection exists before exact-request TLS admin approval.
+   Native RPC probes additionally cover cancellation, denial, exact-request
+   replacement, preservation of the working authorization and admin revocation
+   without automatic re-enrollment.
 
-The fixture driver invokes the native tool/command and router APIs. It does not
-paste terminal input or manufacture human approval from a peer message. The
-provider deliberately does not exist, so these are **real native admission and
-routing tests, not authenticated model-response acceptance**. They also do not
-prove the published npm installer, Docker host recreation, or the full concurrent
-session acceptance matrix. Issue #8 remains open for those outstanding gates.
+Both tests restart the actual server and TUI with the documented private/native
+roots, retain the exact native conversation and broker identity, recover unread
+broker delivery and give a fresh conversation an independent address. They also
+retain queued native human input, leave a native permission request unapproved,
+and verify that a failed execution is not silently woken again.
+
+The fixture driver uses native tool/command/router/RPC APIs for lifecycle cases;
+the initial setup dialog is exercised using actual PTY keyboard input. Human admin
+approval comes from the real disposable form-login UI, never from peer content.
+The selected provider deliberately does not exist. These are **real native
+admission, routing, restart and failure tests, not authenticated model-response
+acceptance**. They do not qualify an active authenticated model toolchain or
+in-flight model abort. The separate Docker gate uses a synthetic native API, so
+it is not evidence of OpenCode itself running inside a recreated container.
+See [the complete evidence boundary](setup-acceptance.md).
 
 ## Local reproduction
 

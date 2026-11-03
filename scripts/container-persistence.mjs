@@ -33,5 +33,5 @@ try{
  const first=await worker(1),second=await worker(2),third=await worker(3);
  for(const next of [second,third]){assert.deepEqual(next.clients,first.clients);assert.equal(next.messageId,first.messageId);assert.equal(next.hostID,first.hostID);}
  assert.equal(second.submissions,1);assert.equal(third.submissions,0);assert.equal(posts,1);
- console.log(`PASS: ${local?'process-only preflight (NOT Docker proof)':'actual Docker remove/recreate'}; installation-only persistence, three isolated sessions, one HTTPS enrollment POST, pending message retained, no duplicate native admission. Synthetic host, not authenticated model wake.`);
+ console.log(`PASS: ${local?'process-only preflight (NOT Docker proof)':'actual Docker remove/recreate'}; installation-only persistence, 30 isolated sessions with identical display names, one HTTPS enrollment POST, pending message retained, no duplicate native admission. Synthetic host, not authenticated model wake.`);
 }finally{for(const cleanup of cleanups.reverse())await cleanup();}

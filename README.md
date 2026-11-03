@@ -18,11 +18,24 @@ only this connector's exact previous package entry with `opencode plugin remove
 specs; keep unrelated plugins and all private Psst directories. Do not install
 both an old Git wrapper and this npm package.
 
-Reopen OpenCode. Ask the agent to run `broker_setup` with only
-`broker_url: "https://YOUR-BROKER"`, then approve that exact request in the broker
-admin page. `broker_setup_status` reports status; `broker_cancel_setup` pauses an
-unapproved local request. No token, connection-file handoff or host policy change
-is needed. Startup never enrolls; an already approved installation is reused.
+Reopen OpenCode, select the intended conversation and run **`/psst-setup`**.
+Enter the broker HTTPS URL in its single text field, then approve the displayed
+request in the broker admin page. `/psst-status` shows progress;
+`/psst-cancel-setup` pauses the local request without revoking existing access.
+No token, connection-file handoff or host policy change is needed. Startup never
+enrolls; an already approved installation is reused.
+
+Running setup again resumes the same pending request. Replacing a terminal request
+requires an explicit native confirmation tied to that exact request. The old
+connection stays active until the approved candidate attaches and its selection
+commits. Denial, cancellation or failed attachment retains the working connection.
+A deliberate new authorization has new credential-bound addresses; it does not
+adopt the previous authorization's mailbox. Old local data remains intact.
+Ordinary upgrades retain the same authorization, addresses and unread mailbox.
+
+The URL-only `broker_setup` tool remains available for an explicitly requested
+initial setup, but an agent tool cannot confirm replacement. Use the native dialog
+for that decision. See [setup, persistence and acceptance](docs/setup-acceptance.md).
 
 ## Messages
 
@@ -71,8 +84,10 @@ The old registered ID had a different host-storage namespace. The new plugin can
 recover one unique private host anchor only from owned connector manifests and an
 exact matching native session ID, creation time, project and location. The old
 private format/path markers remain internal compatibility data, not plugin names.
-Corrupt, ambiguous or unprovable ownership stops with `identity_recovery_*`; no
-replacement client is silently created. Existing live ownership still causes an
+Corrupt, ambiguous or changed live ownership stops with `identity_recovery_*`.
+A fresh independent native host gets a new anchor only when all relevant previous
+session IDs are conclusively absent, or belong to another directory/workspace;
+it never adopts their journals. Existing live ownership still causes an
 owner conflict. Preserve the files and report the error rather than resetting them.
 Old classic journals without exact native bindings cannot be migrated automatically:
 `identity_legacy_migration_required` preserves them and stops new identity creation.
@@ -81,7 +96,10 @@ This is a preservation limit, not a successful migration of that old layout.
 An old **unapproved** setup request whose owner existed only in the old host
 namespace cannot be resumed safely. It remains intact and inert with
 `setup_owner_recovery_required`; existing approved authorization is unaffected.
-No direct host-database access or invented cross-namespace migration is used.
+New pending records also persist the exact owner binding privately, so they can
+resume after host-storage namespace loss only when the native session still
+matches. A crash after candidate persistence resumes that same request with GET,
+never another startup enrollment. No direct host-database access is used.
 
 ## Verification
 
@@ -94,10 +112,11 @@ npm run pack:check
 
 Tests install the actual root tarball with Git unavailable, use the
 official 2.2.5 package loader to select the native server entry, and cover private
-state, exact receipts, ownership, recovery and cancellation. Optional real-host
-checks use an already available executable via `OPENCODE_BINARY`; this package
-and CI do not install a CLI or model provider. Native/model behavior in the owner's
-sandbox is part of the joint pilot, not asserted by package tests.
+state, exact receipts, ownership, recovery and cancellation. The required CI host job downloads a checksum-pinned official OpenCode 2.2.5
+executable and exercises the real server/TUI against a disposable TLS authority.
+Local probes use `OPENCODE_BINARY`. The package never installs a host or provider.
+Authenticated model execution remains a separately documented acceptance gate,
+not something a nonexistent-provider or native-admission test proves.
 
 MIT. Vendored Psst code keeps its license and exact integrity pins.
 

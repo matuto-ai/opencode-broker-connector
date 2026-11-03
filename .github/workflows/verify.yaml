@@ -22,6 +22,17 @@ jobs:
         run: node scripts/test.mjs local
       - name: Verify SDK and protocol integration
         run: node scripts/test.mjs integration
+      - name: Fetch pinned previous connector source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: matuto-ai/opencode-psst-connector
+          ref: 04160a087e5aeb5237ab74ebddfcc720aa72327c
+          path: .test-fixtures/opencode-previous
+          persist-credentials: false
+      - name: Verify upgrade from actual v0.5.1 source
+        run: node --test test/current-migration.test.mjs
+        env:
+          PSST_PREVIOUS_SOURCE_DIR: ${{ github.workspace }}/.test-fixtures/opencode-previous
       - name: Fetch pinned HTTPS approval test server
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
