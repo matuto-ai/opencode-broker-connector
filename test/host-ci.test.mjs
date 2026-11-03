@@ -38,7 +38,7 @@ test('mandatory host stage fails before testing when a prerequisite is absent', 
 
 test('CI runs official host tests in a bounded parallel job with verified fixtures', () => {
   const workflow = readFileSync(new URL('../.github/workflows/verify.yaml', import.meta.url), 'utf8');
-  const job = workflow.split('\n  official-host:\n')[1];
+  const job = workflow.split('\n  official-host:\n')[1]?.split('\n  verify:\n')[0];
   assert.ok(job, 'official-host job must exist');
   assert.match(job, /timeout-minutes: 3/);
   assert.doesNotMatch(job, /continue-on-error:|\n    needs:|\n    if:/);
@@ -52,4 +52,24 @@ test('CI runs official host tests in a bounded parallel job with verified fixtur
   assert.match(job, /OPENCODE_BINARY: \$\{\{ runner\.temp \}\}\/opencode-host\/opencode/);
   assert.match(job, /PSST_APPROVAL_BROKER_DIR: \$\{\{ github\.workspace \}\}\/\.test-fixtures\/psst-approval/);
   assert.doesNotMatch(job, /secrets\.|NODE_TLS_REJECT_UNAUTHORIZED/);
+});
+
+test('existing required verify check fails closed for either parallel job', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/verify.yaml', import.meta.url), 'utf8');
+  const gate = workflow.split('\n  verify:\n')[1];
+  assert.ok(gate);
+  assert.match(gate, /needs: \[checks, official-host\]/);
+  assert.match(gate, /if: \$\{\{ always\(\) \}\}/);
+  assert.match(gate, /CHECKS_RESULT: \$\{\{ needs\.checks\.result \}\}/);
+  assert.match(gate, /HOST_RESULT: \$\{\{ needs\.official-host\.result \}\}/);
+  const command = gate.match(/run: (.+)/)?.[1];
+  assert.ok(command);
+  for (const checks of ['success', 'failure', 'cancelled', 'skipped', '']) {
+    for (const host of ['success', 'failure', 'cancelled', 'skipped', '']) {
+      const result = spawnSync('sh', ['-c', command], {
+        env: { CHECKS_RESULT: checks, HOST_RESULT: host },
+      });
+      assert.equal(result.status === 0, checks === 'success' && host === 'success', `${checks}/${host}`);
+    }
+  }
 });

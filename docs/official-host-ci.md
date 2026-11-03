@@ -1,8 +1,9 @@
 # Official-host CI evidence
 
 Every push and pull request runs the `official-host` job alongside the existing
-`verify` job. It is a mandatory, three-minute-bounded job, not an optional local
-probe. It installs only the packed plugin's runtime dependency (`zod`), so it does
+`checks` job. The existing required `verify` check waits for both and fails
+unless both succeed, including failure, cancellation or skipped prerequisites.
+The host job has a three-minute bound and is not an optional local probe. It installs only the packed plugin's runtime dependency (`zod`), so it does
 not duplicate the heavier SDK integration dependency installation.
 
 ## Pinned inputs

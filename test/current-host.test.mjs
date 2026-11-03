@@ -13,15 +13,7 @@ import { createBrokerServer } from './broker-fixture/src/server.mjs';
 import { createPresenceReader, presenceDirectory } from '../src/active-presence.mjs';
 import { loadBrokerReference } from '../src/reference.mjs';
 
-async function stopHostProcess(child,group=false) {
- const stop=signal=>{try{if(group)process.kill(-child.pid,signal);else child.kill(signal);}catch(error){if(error.code!=='ESRCH')throw error;}};
- if(child.exitCode===null&&child.signalCode===null){
-  const exited=new Promise(resolve=>child.once('exit',resolve));
-  const timer=setTimeout(()=>stop('SIGKILL'),2000);
-  try{stop('SIGTERM');await exited;}finally{clearTimeout(timer);}
- }
- child.stdin?.destroy();child.stdout?.destroy();child.stderr?.destroy();
-}
+import { stopHostProcess } from './host-process.mjs';
 
 for (const approval of [false, true]) test(approval ? 'official OpenCode URL-only native setup awaits real TLS admin approval before automatic delivery' : 'official OpenCode loads packed root native plugin and automatically admits broker message without changing selection',
  {skip:!process.env.OPENCODE_BINARY || approval && !process.env.PSST_APPROVAL_BROKER_DIR,timeout:60000},async t=>{
@@ -61,8 +53,18 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode URL-onl
  const session=(await api('/api/session',{location:{directory:project},title:'Psst OpenCode fixture',agent:'plan',model:{providerID:'fixture',id:'nonexistent'}})).data;
  // Mount the actual pinned TUI in a PTY. No model credentials or permission flags.
  const quote=s=>"'"+s.replaceAll("'", "'\\''")+"'";
- const tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; exec ${quote(process.env.OPENCODE_BINARY)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:{PATH:process.env.PATH,TERM:'xterm-256color',HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert},detached:true,stdio:['pipe','pipe','pipe']});
- let tuiOutput='';tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});fixtureContext.after(()=>stopHostProcess(tui,true));
+ const tuiPidFile=join(dir,'tui.pid');
+ const tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(process.env.OPENCODE_BINARY)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:{PATH:process.env.PATH,TERM:'xterm-256color',HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert},detached:true,stdio:['pipe','pipe','pipe']});
+ let tuiOutput='';tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});fixtureContext.after(async()=>{
+  // Give util-linux script its own two-second child-session shutdown window.
+  await stopHostProcess(tui,true,3000);
+  const pid=Number(readFileSync(tuiPidFile,'utf8').trim());assert.ok(Number.isInteger(pid)&&pid>0);
+  // util-linux script owns another session for the shell/TUI. Verify that the
+  // actual native process also exited, not only the PTY recorder's leader.
+  const alive=()=>{try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');return !['Z','X'].includes(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]);}catch(error){if(error.code==='ENOENT')return false;throw error;}};
+  for(let i=0;i<100&&alive();i++)await delay(10);
+  assert.equal(alive(),false,'actual native TUI must stop with its PTY recorder');
+ });
  let reader;for(let i=0;i<150;i++){try{reader=createPresenceReader({directory:presenceDirectory(join(dir,'installation'),{directory:project})});if(reader.selected().has(session.id))break;}catch{}await delay(100);}
  assert.ok(reader?.selected().has(session.id),'mounted official TUI must emit selected-session lease: '+tuiOutput.replaceAll(password,'[fixture-secret]'));
  if(!authority)await api('/api/session/'+session.id+'/command',{name:'fixture-connect',text:''});

@@ -5,7 +5,7 @@ on:
 permissions:
   contents: read
 jobs:
-  verify:
+  checks:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -70,3 +70,14 @@ jobs:
         env:
           OPENCODE_BINARY: ${{ runner.temp }}/opencode-host/opencode
           PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-fixtures/psst-approval
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    needs: [checks, official-host]
+    if: ${{ always() }}
+    steps:
+      - name: Require both verification jobs to pass
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          HOST_RESULT: ${{ needs.official-host.result }}
+        run: test "$CHECKS_RESULT" = success && test "$HOST_RESULT" = success
