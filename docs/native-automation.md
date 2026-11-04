@@ -16,6 +16,10 @@ one server plugin, `matuto.psst`; no classic or optional alternate entry is ship
 - Interrupt/failure pauses delivery. Subsequent native execution can reopen the
   event pause. Move/archive/delete/unload fence the exact owner; resumable unload
   does not terminally close its surviving broker identity.
+- Losing the native event subscription, including a clean stream end, stops
+  transport, delivery and tools. Reload the plugin to resume the same durable
+  identities. In-flight admissions remain uncertain until exact native context
+  proves acceptance; stream recovery never resubmits them automatically.
 - Peer messages are native synthetic machine-origin input, not human authority.
   Agent/model selection, drafts and native permissions remain unchanged.
 - Private operation IDs include the verified native call identity and original
