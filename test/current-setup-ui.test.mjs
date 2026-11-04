@@ -263,3 +263,39 @@ test('reauthorize reconciles a lost replacement response without replaying confi
   assert.equal(f.calls.at(-1).input.replacement_confirmed, undefined);
   assert.match(f.toasts.at(-1).message, /same-candidate/);
 });
+
+test('actual failed-attachment payloads distinguish approved candidate from blocked or paused setup', async t => {
+  const { createNativeSetup } = await import('../src/native-setup.mjs');
+  let publicResult, saved;
+  const f = fixture(t, { result: { status: () => publicResult } });
+  const stored = new Map(), controller = new AbortController();
+  const setup = createNativeSetup({
+    directory: f.ctx.location.directory, signal: controller.signal,
+    storage: { get: async key => stored.get(key), set: async (key, value) => stored.set(key, value) },
+    verify: async id => ({ id, projectID: 'project', location: f.ctx.location, time: { created: 1 } }),
+    status: () => ({ connected: false }), activate: async () => { throw Error('candidate_attachment_failed'); },
+    loadHelper: async () => ({ readApprovalState: () => saved,
+      beginApproval: async () => saved = { state: 'approved', requestId: 'approved-candidate', connectionFile: '/candidate' } }),
+  });
+  t.after(() => setup.stop());
+  const context = { sessionID: 'ses_one', signal: controller.signal };
+  let failure;
+  try { await setup.invoke('broker_setup', { broker_url: 'https://broker.example.com' }, context); }
+  catch (error) { failure = error; }
+  assert.equal(failure?.message, 'candidate_attachment_failed');
+  publicResult = await setup.failure(failure, context.sessionID);
+  assert.equal(publicResult.state, 'setup_blocked'); assert.equal(publicResult.request_state, 'approved');
+  await f.run('psst-status'); assert.match(f.toasts.at(-1).message, /approved candidate is not connected yet/);
+  publicResult = await setup.invoke('broker_setup_status', {}, context);
+  assert.equal(publicResult.state, 'paused'); assert.equal(publicResult.request_state, 'approved');
+  await f.run('psst-status'); assert.match(f.toasts.at(-1).message, /setup is paused/);
+  assert.match(f.toasts.at(-1).message, /approved candidate is not connected yet/);
+  assert.match(f.toasts.at(-1).message, /approved-candidate/);
+});
+
+test('candidate annotation does not override denied or pending setup state', async t => {
+  for (const state of ['denied', 'pending']) {
+    const f = fixture(t, { result: { status: { state, request_state: 'approved', connected: false } } });
+    await f.run('psst-status'); assert.doesNotMatch(f.toasts.at(-1).message, /approved candidate/);
+  }
+});

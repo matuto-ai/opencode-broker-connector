@@ -64,7 +64,9 @@ function statusMessage(result) {
     : setupMessage ?? 'Psst is not connected. Use /psst-setup to configure it.';
   if (result?.authorization_state === 'expired') message = 'The current authorization expired. Use /psst-reauthorize for an explicitly approved replacement. Existing local data is retained.';
   if (result?.authorization_state === 'rejected') message = 'The broker rejected the current authorization. Use /psst-reauthorize for an explicitly approved replacement. Existing local data is retained.';
-  if (result?.state === 'approved' && (result?.candidate_selected !== true || result?.connected !== true)) message += ' The approved candidate is not connected yet.' + (result?.candidate_selected !== true ? ' Its attachment has not been committed.' : '');
+  const approvedCandidate = result?.state === 'approved'
+    || ['paused', 'setup_blocked'].includes(result?.state) && result?.request_state === 'approved';
+  if (approvedCandidate && (result?.candidate_selected !== true || result?.connected !== true)) message += ' The approved candidate is not connected yet.' + (result?.candidate_selected !== true ? ' Its attachment has not been committed.' : '');
   if (typeof result?.approval_url === 'string' && result.approval_url.length <= 2048) {
     try {
       const url = new URL(result.approval_url);
