@@ -5,11 +5,13 @@ const config = { directory: '/tmp/psst-native-host-fixture', project: '/tmp/psst
   binary: '/runner/verified/opencode', modules: '/runner/node_modules', moduleSource: '/actual/node_modules', uid: 1001, gid: 1001, runID: 'fixture' };
 const env = { HOME: config.directory + '/home', XDG_DATA_HOME: config.directory + '/data',
   NODE_EXTRA_CA_CERTS: '/tmp/authority/cert.pem', OPENCODE_SERVER_PASSWORD: 'synthetic-private-password',
+  BUN_TMPDIR: config.directory + '/cache/native-assets',
   GITHUB_TOKEN: 'must-not-forward', TERM: 'xterm-256color' };
 test('real-host container launcher uses explicit test-only mounts, UID and pinned image', () => {
   const args = containerArgs(config, 'owned-name', ['serve', '--hostname', '127.0.0.1'], env);
   assert.ok(args.includes(HOST_IMAGE));
   assert.equal(args[args.indexOf('--user') + 1], '1001:1001');
+  assert.ok(args.includes('/tmp:rw,nosuid,nodev,noexec,mode=1777'));
   assert.ok(args.includes('--read-only')); assert.ok(args.includes('--cap-drop'));
   assert.equal(args.includes('--tty'), false);
   const mounts = args.flatMap((x, i) => x === '--mount' ? [args[i + 1]] : []);
@@ -27,7 +29,7 @@ test('real TUI receives its own container PTY and only allowlisted environment n
   const args = containerArgs(config, 'owned-name', ['--server', 'http://127.0.0.1:1234', '--session', 'ses_fixture'], env);
   assert.ok(args.includes('--interactive')); assert.ok(args.includes('--tty'));
   const names = args.flatMap((x, i) => x === '--env' ? [args[i + 1]] : []);
-  assert.deepEqual(names.sort(), ['COLUMNS=120','HOME','LINES=40','NODE_EXTRA_CA_CERTS','OPENCODE_SERVER_PASSWORD','TERM','XDG_DATA_HOME'].sort());
+  assert.deepEqual(names.sort(), ['BUN_TMPDIR','COLUMNS=120','HOME','LINES=40','NODE_EXTRA_CA_CERTS','OPENCODE_SERVER_PASSWORD','TERM','XDG_DATA_HOME'].sort());
 });
 
 // Executable failure/cleanup preflight only. This Docker-shaped subprocess uses
@@ -82,7 +84,7 @@ else if(args[0]==='container'&&args[1]==='inspect'){
 `, { mode: 0o700 });
   const launcher = createContainerLauncher({ directory, project, modules, binary: executable, ...options });
   t.after(() => rmSync(launcher.evidenceReceipt, { force: true }));
-  const env = () => ({ ...process.env, HOME: join(directory, 'home'), NODE_EXTRA_CA_CERTS: join(directory, 'ca.pem'), OPENCODE_SERVER_PASSWORD: 'fixture-launch-password' });
+  const env = () => ({ ...process.env, HOME: join(directory, 'home'), NODE_EXTRA_CA_CERTS: join(directory, 'ca.pem'), BUN_TMPDIR: join(directory,'cache','native-assets'), OPENCODE_SERVER_PASSWORD: 'fixture-launch-password' });
   writeFileSync(join(directory, 'ca.pem'), 'fixture-only');
   const remaining = () => readdirSync(state).filter(name => name.startsWith('psst-real-host-'));
   const calls = () => readFileSync(join(state, 'calls.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -193,4 +195,8 @@ for (const mode of ['failed-remove', 'timed-remove']) test(`outer cleanup retain
   const receipt = JSON.parse(readFileSync(f.launcher.evidenceReceipt, 'utf8'));
   assert.equal(receipt.names.length, 1);
   assert.ok(f.calls().some(args => args[0] === 'rm' && args.at(-1) === receipt.names[0]));
+});
+
+test('container extraction environment refuses inherited or external asset paths', () => {
+  assert.throws(() => containerArgs(config, 'owned-name', ['serve'], { ...env, BUN_TMPDIR: '/tmp' }), /owned extraction directory/);
 });

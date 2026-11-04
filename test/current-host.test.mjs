@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -47,8 +47,11 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  const password=randomBytes(32).toString('base64url');
  const port=await new Promise((resolve,reject)=>{const s=createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const port=s.address().port;s.close(()=>resolve(port));});});
  const hostEnv={PATH:process.env.PATH,HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert};
+ const extractionDirectory=join(dir,'cache','native-assets');
+ hostEnv.BUN_TMPDIR=extractionDirectory;
+ const prepareExtraction=()=>{mkdirSync(extractionDirectory,{recursive:true,mode:0o700});assert.equal(statSync(extractionDirectory).mode&0o777,0o700);};
  let child,output='';
- function startServer(){const args=['--log-level','debug','--print-logs','serve','--hostname','127.0.0.1','--port',String(port)];const executable=containers?.prepare(args,hostEnv) ?? process.env.OPENCODE_BINARY;child=spawn(executable,args,{cwd:project,env:hostEnv,stdio:['ignore','pipe','pipe']});child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);const owned=child;fixtureContext.after(()=>stopHostProcess(owned));}
+ function startServer(){prepareExtraction();const args=['--log-level','debug','--print-logs','serve','--hostname','127.0.0.1','--port',String(port)];const executable=containers?.prepare(args,hostEnv) ?? process.env.OPENCODE_BINARY;child=spawn(executable,args,{cwd:project,env:hostEnv,stdio:['ignore','pipe','pipe']});child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);const owned=child;fixtureContext.after(()=>stopHostProcess(owned));}
  startServer();
  const base=`http://127.0.0.1:${port}`;
  async function api(path,body,method=body?'POST':'GET'){const r=await fetch(base+path,{method,headers:{'content-type':'application/json',authorization:'Basic '+Buffer.from('opencode:'+password).toString('base64')},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(5000)});assert.ok(r.ok,`${path}: ${r.status} ${await r.clone().text()}`);return r.status===204?null:r.json();}
@@ -60,7 +63,7 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  const quote=s=>"'"+s.replaceAll("'", "'\\''")+"'";
  const tuiPidFile=join(dir,'tui.pid');
  let tui,tuiOutput='',stopTui;
- function startTui(){ let stopped=false;const executable=containers?.prepare(['--server',base,'--session',session.id,project],hostEnv) ?? process.env.OPENCODE_BINARY; tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(executable)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:hostEnv,detached:true,stdio:['pipe','pipe','pipe']});
+ function startTui(){prepareExtraction(); let stopped=false;const executable=containers?.prepare(['--server',base,'--session',session.id,project],hostEnv) ?? process.env.OPENCODE_BINARY; tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(executable)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:hostEnv,detached:true,stdio:['pipe','pipe','pipe']});
 tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});const owned=tui;stopTui=async()=>{
   if(stopped)return;stopped=true;
   // Give util-linux script its own two-second child-session shutdown window.
@@ -77,6 +80,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  startTui();
  let reader;for(let i=0;i<150;i++){try{reader=createPresenceReader({directory:presenceDirectory(join(dir,'installation'),{directory:project})});if(reader.selected().has(session.id))break;}catch{}await delay(100);}
  assert.ok(reader?.selected().has(session.id),'mounted official TUI must emit selected-session lease: '+tuiOutput.replaceAll(password,'[fixture-secret]'));
+ assert.ok(readdirSync(extractionDirectory).some(name=>/^\.bun-.*\.so$/.test(name)),'actual pinned TUI must extract its native shared library into the private rebuildable cache');
  // Lifecycle checks use the real TUI client RPC transport. Initial setup below
  // separately exercises actual keyboard input and the native URL dialog.
  let rpcSequence=0,enrollmentID,approvedEnrollmentID;
@@ -159,6 +163,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  startServer();await waitServer();startTui();
  for(let i=0;i<150&&!reader.selected().has(session.id);i++)await delay(100);
  assert.ok(reader.selected().has(session.id),'reopened actual TUI selects the same native session');
+ assert.ok(readdirSync(extractionDirectory).some(name=>/^\.bun-.*\.so$/.test(name)),'reopened TUI rebuilds native extraction after cache deletion');
  writeFileSync(routeFile,JSON.stringify({type:'session',sessionID:session.id}));
  let admitted;
  for(let i=0;i<150;i++){

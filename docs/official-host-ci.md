@@ -87,7 +87,13 @@ names before creation, confirms creation in the supervising test process before
 starting any killable attach wrapper, checks removal at restart, and force-cleans
 owned leftovers on failure. A leftover at normal teardown fails the test even after cleanup.
 
-Only the disposable fixture tree is a writable bind mount; `/tmp` is ephemeral.
+Only the disposable fixture tree is a writable bind mount; `/tmp` remains
+ephemeral and `noexec,nosuid,nodev`. The pinned Bun executable extracts OpenTUI
+native libraries into an owned 0700 `cache/native-assets` subdirectory using
+an explicit `BUN_TMPDIR` value. This executable extraction location is
+inside the existing fixture bind, not a relaxation of `/tmp` or root permissions.
+It is deleted with XDG cache and recreated before each launch; tests require
+actual native shared-library extraction there before and after cache rebuilding.
 The verified
 binary, runtime dependencies, and broker public CA are read-only mounts. No user
 home, checkout, Docker socket, or runner token is mounted. Host networking is used

@@ -10,7 +10,7 @@ import { randomUUID } from 'node:crypto';
 
 export const HOST_IMAGE = 'node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df';
 const label = 'io.matuto.psst.real-host-fixture';
-const envKeys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'PSST_OPENCODE_CONFIG_DIR', 'NODE_EXTRA_CA_CERTS', 'OPENCODE_SERVER_PASSWORD', 'TERM'];
+const envKeys = ['HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'PSST_OPENCODE_CONFIG_DIR', 'NODE_EXTRA_CA_CERTS', 'OPENCODE_SERVER_PASSWORD', 'TERM', 'BUN_TMPDIR'];
 function docker(args, timeout = 10000, env = process.env) {
   const r = spawnSync('docker', args, { encoding: 'utf8', timeout, env });
   if (r.error) throw r.error;
@@ -29,10 +29,12 @@ function inspect(name) {
 }
 export function containerArgs(config, name, args, env = process.env) {
   const tty = args.includes('--server');
+  const extraction = join(config.directory, 'cache', 'native-assets');
+  assert.equal(env.BUN_TMPDIR, extraction, 'Bun embedded assets must use the owned extraction directory');
   const mount = (source, target = source) => `type=bind,src=${source},dst=${target},readonly`;
   return ['create', '--name', name, '--label', `${label}=${config.runID}`, '--init', '--network', 'host',
     '--user', `${config.uid}:${config.gid}`, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--tmpfs', '/tmp:rw,nosuid,nodev,mode=1777', '--interactive', ...(tty ? ['--tty'] : []),
+    '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,mode=1777', '--interactive', ...(tty ? ['--tty'] : []),
     '--mount', `type=bind,src=${config.directory},dst=${config.directory}`,
     '--mount', mount(config.moduleSource, config.modules), '--mount', mount(config.binary, '/usr/local/bin/opencode'),
     // The authority's temporary directory is NOT mounted; only its public CA.
