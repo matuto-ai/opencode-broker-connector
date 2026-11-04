@@ -81,7 +81,9 @@ The published-package installer probe remains a separate opt-in gate requiring
 The same `current-host.test.mjs` scenarios run a second time with
 `PSST_OPENCODE_DOCKER=1`. This launches the checksum-verified official binary,
 not the synthetic host fixture, in a fresh container for every server and TUI
-invocation. The TUI receives its own container PTY. Both containers are removed
+invocation. The TUI receives its own container PTY and joins only the immutable
+PID namespace of its confirmed running, fixture-owned server container. Host PID
+namespace sharing is never enabled. Both containers are removed
 before reopening, and Docker container IDs must change. The runner records owned
 names before creation, confirms creation in the supervising test process before
 starting any killable attach wrapper, checks removal at restart, and force-cleans
@@ -115,3 +117,11 @@ outside it. The failure names both retained paths without printing credentials;
 an absent inspect result is never treated as proof that a late create is impossible.
 Executable fake-Docker tests cover that failure layer cheaply, but are not real
 Docker acceptance. Local environments without Docker cannot qualify this gate.
+
+The test observer runs short `docker exec` Node probes in that owned server
+container, importing the packed production presence reader. PID, process-start
+and boot-identity validation therefore runs in the same namespace as both native
+processes, not in the outer CI runner. It never interprets raw leases or spoofs
+process liveness. Each probe verifies the current server ID, ownership label and
+running state, so observations cannot be reused across removed generations.
+The production plugin independently uses its unchanged presence checks.

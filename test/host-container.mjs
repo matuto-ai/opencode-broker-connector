@@ -6,6 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { appendFileSync, readFileSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
 
 export const HOST_IMAGE = 'node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df';
@@ -29,12 +30,13 @@ function inspect(name) {
 }
 export function containerArgs(config, name, args, env = process.env) {
   const tty = args.includes('--server');
+  if (tty) assert.match(config.serverContainerID ?? '', /^[a-f0-9]{64}$/, 'TUI requires confirmed owned server container ID');
   const extraction = join(config.directory, 'cache', 'native-assets');
   assert.equal(env.BUN_TMPDIR, extraction, 'Bun embedded assets must use the owned extraction directory');
   const mount = (source, target = source) => `type=bind,src=${source},dst=${target},readonly`;
   return ['create', '--name', name, '--label', `${label}=${config.runID}`, '--init', '--network', 'host',
     '--user', `${config.uid}:${config.gid}`, '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,mode=1777', '--interactive', ...(tty ? ['--tty'] : []),
+    '--tmpfs', '/tmp:rw,nosuid,nodev,noexec,mode=1777', '--interactive', ...(tty ? ['--tty', '--pid', `container:${config.serverContainerID}`] : []),
     '--mount', `type=bind,src=${config.directory},dst=${config.directory}`,
     '--mount', mount(config.moduleSource, config.modules), '--mount', mount(config.binary, '/usr/local/bin/opencode'),
     // The authority's temporary directory is NOT mounted; only its public CA.
@@ -54,6 +56,7 @@ export function createContainerLauncher({ directory, project, binary, modules, o
   writeFileSync(config.identities, '', { mode: 0o600 });
   assert.ok(Number.isInteger(operationTimeoutMs) && operationTimeoutMs >= 100 && operationTimeoutMs <= 10000);
   assert.ok(Number.isInteger(reconcileMs) && reconcileMs >= 100 && reconcileMs <= 10000);
+  let server;
   const uncertain = new Set();
   const evidenceReceipt = join(tmpdir(), `psst-real-host-uncertain-${config.runID}.json`);
   const retainEvidence = () => uncertain.size > 0;
@@ -68,17 +71,39 @@ export function createContainerLauncher({ directory, project, binary, modules, o
     if (info) assert.equal(info.Config.Labels[label], config.runID, 'refuse to touch a foreign container');
     return info;
   };
+  const verifiedServer = () => {
+    assert.ok(server, 'TUI/probe requires an owned server');
+    const info = owned(server);
+    assert.ok(info, 'owned server has been removed');
+    assert.equal(info.Id, server.id, 'owned server identity changed');
+    assert.equal(info.State?.Running, true, 'owned server must be running');
+    return info.Id;
+  };
   return {
     retainEvidence, evidenceReceipt,
+    presenceReader({ installation, location }) {
+      assert.equal(installation, join(directory, 'installation'));
+      assert.equal(location.directory, project);
+      const source = presenceProbeSource(pathToFileURL(join(directory, 'package', 'src', 'active-presence.mjs')).href, installation, location);
+      return { selected() {
+        // Execute the real PID/start/boot checks where the actual native host
+        // lives. Never interpret its lease using the runner's PID namespace.
+        const result = JSON.parse(checked(['exec', verifiedServer(), 'node', '--input-type=module', '-e', source]));
+        assert.ok(Array.isArray(result) && result.every(id => typeof id === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(id)));
+        return new Set(result);
+      } };
+    },
     prepare(args, env) {
       // Creation belongs to this supervising runner, never the short-grace PTY
       // wrapper. A wrapper cannot exist until Docker confirms the immutable ID.
+      const tty = args.includes('--server');
+      const launchConfig = tty ? { ...config, serverContainerID: verifiedServer() } : config;
       const name = `psst-real-host-${config.runID}-${randomUUID()}`;
       appendFileSync(config.ledger, JSON.stringify({ name }) + '\n');
       uncertain.add(name);saveUncertainty();
       let id;
       try {
-        const result = docker(containerArgs(config, name, args, env), operationTimeoutMs, { ...process.env, ...env });
+        const result = docker(containerArgs(launchConfig, name, args, env), operationTimeoutMs, { ...process.env, ...env });
         assert.equal(result.status, 0, `Docker create failed: ${result.stderr}`);
         id = result.stdout.trim();assert.match(id, /^[a-f0-9]{64}$/);
       } catch (error) {
@@ -94,6 +119,7 @@ export function createContainerLauncher({ directory, project, binary, modules, o
         throw error;
       }
       appendFileSync(config.identities, JSON.stringify({ name, id }) + '\n');
+      if (!tty) server = { name, id };
       uncertain.delete(name);saveUncertainty();
       const launcher = join(directory, `opencode-container-${id}`);
       writeFileSync(launcher, `#!${process.execPath}\nimport { runContainerCLI } from ${JSON.stringify(import.meta.url)};\nawait runContainerCLI(${JSON.stringify(config)},${JSON.stringify(name)});\n`, { mode: 0o700 });
@@ -140,4 +166,8 @@ export async function runContainerCLI(config, name) {
     remove();
     for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.off(signal, stop);
   }
+}
+
+export function presenceProbeSource(moduleURL, installation, location) {
+  return `import {createPresenceReader,presenceDirectory} from ${JSON.stringify(moduleURL)};const reader=createPresenceReader({directory:presenceDirectory(${JSON.stringify(installation)},${JSON.stringify(location)})});process.stdout.write(JSON.stringify([...reader.selected()]));`;
 }

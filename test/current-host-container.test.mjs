@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { containerArgs, HOST_IMAGE } from './host-container.mjs';
+import { containerArgs, HOST_IMAGE, presenceProbeSource } from './host-container.mjs';
 const config = { directory: '/tmp/psst-native-host-fixture', project: '/tmp/psst-native-host-fixture/project',
-  binary: '/runner/verified/opencode', modules: '/runner/node_modules', moduleSource: '/actual/node_modules', uid: 1001, gid: 1001, runID: 'fixture' };
+  binary: '/runner/verified/opencode', modules: '/runner/node_modules', moduleSource: '/actual/node_modules', uid: 1001, gid: 1001, runID: 'fixture', serverContainerID: 'a'.repeat(64) };
 const env = { HOME: config.directory + '/home', XDG_DATA_HOME: config.directory + '/data',
   NODE_EXTRA_CA_CERTS: '/tmp/authority/cert.pem', OPENCODE_SERVER_PASSWORD: 'synthetic-private-password',
   BUN_TMPDIR: config.directory + '/cache/native-assets',
@@ -13,7 +13,7 @@ test('real-host container launcher uses explicit test-only mounts, UID and pinne
   assert.equal(args[args.indexOf('--user') + 1], '1001:1001');
   assert.ok(args.includes('/tmp:rw,nosuid,nodev,noexec,mode=1777'));
   assert.ok(args.includes('--read-only')); assert.ok(args.includes('--cap-drop'));
-  assert.equal(args.includes('--tty'), false);
+  assert.equal(args.includes('--tty'), false);assert.equal(args.includes('--pid'), false);
   const mounts = args.flatMap((x, i) => x === '--mount' ? [args[i + 1]] : []);
   assert.deepEqual(mounts, [
     `type=bind,src=${config.directory},dst=${config.directory}`,
@@ -28,6 +28,8 @@ test('real-host container launcher uses explicit test-only mounts, UID and pinne
 test('real TUI receives its own container PTY and only allowlisted environment names', () => {
   const args = containerArgs(config, 'owned-name', ['--server', 'http://127.0.0.1:1234', '--session', 'ses_fixture'], env);
   assert.ok(args.includes('--interactive')); assert.ok(args.includes('--tty'));
+  assert.equal(args[args.indexOf('--pid')+1], 'container:'+'a'.repeat(64));
+  assert.equal(args.includes('host') && args[args.indexOf('--pid')+1] === 'host', false);
   const names = args.flatMap((x, i) => x === '--env' ? [args[i + 1]] : []);
   assert.deepEqual(names.sort(), ['BUN_TMPDIR','COLUMNS=120','HOME','LINES=40','NODE_EXTRA_CA_CERTS','OPENCODE_SERVER_PASSWORD','TERM','XDG_DATA_HOME'].sort());
 });
@@ -37,6 +39,7 @@ test('real TUI receives its own container PTY and only allowlisted environment n
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { createPresenceWriter, presenceDirectory } from '../src/active-presence.mjs';
 import { spawn, spawnSync } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createContainerLauncher } from './host-container.mjs';
@@ -65,7 +68,7 @@ else if(args[0]==='container'&&args[1]==='inspect'){
  writeFileSync(join(root,'env-forwarded'),String(process.env.OPENCODE_SERVER_PASSWORD==='fixture-launch-password'));
  const name=args[args.indexOf('--name')+1],pair=args[args.indexOf('--label')+1].split('='),id=createHash('sha256').update(name).digest('hex');
  // A failed create can still have produced an owned container.
- const record=JSON.stringify({Id:id,Config:{Labels:{[pair[0]]:mode==='foreign'?'not-this-fixture':pair[1]}}});
+ const record=JSON.stringify({Id:id,State:{Running:false},Config:{Labels:{[pair[0]]:mode==='foreign'?'not-this-fixture':pair[1]}}});
  if(mode==='late-create'||mode==='unresolved-create'){
   writeFileSync(join(root,'create-started'),name);
   if(mode==='late-create')spawn(process.execPath,['--input-type=module','-e',\"import {writeFileSync} from 'node:fs';setTimeout(()=>writeFileSync(process.argv[1],process.argv[2]),2500);\",file(name),record],{detached:true,stdio:'ignore'}).unref();
@@ -73,9 +76,10 @@ else if(args[0]==='container'&&args[1]==='inspect'){
  }else{writeFileSync(file(name),record);
  if(mode==='uncertain-create'){console.error('fixture lost create response');process.exit(19);}console.log(id);}
 }else if(args[0]==='start'){
- const name=args.at(-1);writeFileSync(join(root,'attached'),name);
+ const name=args.at(-1);const current=JSON.parse(readFileSync(file(name),'utf8'));current.State.Running=true;writeFileSync(file(name),JSON.stringify(current));writeFileSync(join(root,'attached'),name);
  if(mode==='blocked'){const timer=setInterval(()=>{if(!existsSync(file(name))){clearInterval(timer);process.exit(137);}},20);}
  else if(mode==='failed-start')process.exit(23);
+}else if(args[0]==='exec'){console.log('[\"ses_probe_fixture\"]');
 }else if(args[0]==='rm'){
  writeFileSync(join(root,'removal-started'),mode??'normal');
  if(mode==='failed-remove'){console.error('fixture removal rejected');process.exit(24);}
@@ -199,4 +203,50 @@ for (const mode of ['failed-remove', 'timed-remove']) test(`outer cleanup retain
 
 test('container extraction environment refuses inherited or external asset paths', () => {
   assert.throws(() => containerArgs(config, 'owned-name', ['serve'], { ...env, BUN_TMPDIR: '/tmp' }), /owned extraction directory/);
+});
+
+
+test('TUI joins only the confirmed running owned server, never host or unrelated PID namespace', t => {
+  const f = fakeDocker(t), args = ['--server','http://127.0.0.1:1234'];
+  assert.throws(() => f.launcher.prepare(args,f.env()), /requires an owned server/);
+  f.launcher.prepare(['serve'],f.env());
+  const record=JSON.parse(readFileSync(join(f.directory,'containers.jsonl'),'utf8').trim());
+  const path=join(f.state,record.name+'.json'), original=JSON.parse(readFileSync(path,'utf8'));
+  assert.throws(() => f.launcher.prepare(args,f.env()), /must be running/);
+  writeFileSync(path,JSON.stringify({...original,Id:'f'.repeat(64),State:{Running:true}}));
+  assert.throws(() => f.launcher.prepare(args,f.env()), /identity changed/);
+  writeFileSync(path,JSON.stringify({...original,State:{Running:true},Config:{Labels:{'io.matuto.psst.real-host-fixture':'foreign'}}}));
+  assert.throws(() => f.launcher.prepare(args,f.env()), /foreign container/);
+  assert.equal(f.calls().filter(a=>a[0]==='create').length,1,'invalid targets never create a TUI container');
+  writeFileSync(path,JSON.stringify({...original,State:{Running:true}}));
+  f.launcher.prepare(args,f.env());
+  const create=f.calls().filter(a=>a[0]==='create').at(-1);
+  assert.equal(create[create.indexOf('--pid')+1], 'container:'+original.Id);
+  const reader=f.launcher.presenceReader({installation:join(f.directory,'installation'),location:{directory:join(f.directory,'project')}});
+  assert.deepEqual([...reader.selected()],['ses_probe_fixture']);
+  const probe=f.calls().find(a=>a[0]==='exec');
+  assert.equal(probe[1],original.Id);assert.deepEqual(probe.slice(2,5),['node','--input-type=module','-e']);
+  assert.match(probe[5],/createPresenceReader/);assert.doesNotMatch(probe[5],/processAlive/);
+  assert.throws(()=>f.launcher.cleanup(),/wrapper shutdown leaked containers/);
+  assert.deepEqual(f.remaining(),[]);
+  assert.throws(()=>reader.selected(),/server has been removed/,'removed generation cannot supply an old observation');
+});
+
+test('namespace observer executes unmodified production PID/start/boot reader, rejecting invalid and dead owners', t => {
+  const root=mkdtempSync(join(tmpdir(),'psst-native-observer-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
+  const installation=join(root,'installation'),project=join(root,'project');mkdirSync(installation,{mode:0o700});mkdirSync(project);
+  const location={directory:project},directory=presenceDirectory(installation,location,{create:true});
+  const moduleURL=new URL('../src/active-presence.mjs',import.meta.url).href;
+  const source=presenceProbeSource(moduleURL,installation,location);
+  const probe=()=>{const result=spawnSync(process.execPath,['--input-type=module','-e',source],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);};
+  const writer=createPresenceWriter({directory});writer.write('ses_live');
+  assert.deepEqual(probe(),['ses_live']);
+  const file=join(directory,writer.owner+'.json'),lease=JSON.parse(readFileSync(file,'utf8'));
+  writeFileSync(file,JSON.stringify({...lease,start:'not-the-live-process-start'}));
+  assert.deepEqual(probe(),[],'raw lease contents cannot bypass live process identity');
+  writeFileSync(file,JSON.stringify({...lease,boot:'not-the-current-boot'}));
+  assert.deepEqual(probe(),[],'boot identity validation remains active');
+  writer.write('ses_live');writer.stop();assert.deepEqual(probe(),[]);
+  const dead=spawnSync(process.execPath,['--input-type=module','-e',`import {createPresenceWriter} from ${JSON.stringify(moduleURL)};createPresenceWriter({directory:${JSON.stringify(directory)}}).write('ses_dead');`],{encoding:'utf8'});
+  assert.equal(dead.status,0,dead.stderr);assert.deepEqual(probe(),[],'terminated TUI cannot satisfy a fresh namespace probe');
 });

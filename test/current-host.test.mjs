@@ -78,7 +78,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  };fixtureContext.after(stopTui);
  }
  startTui();
- let reader;for(let i=0;i<150;i++){try{reader=createPresenceReader({directory:presenceDirectory(join(dir,'installation'),{directory:project})});if(reader.selected().has(session.id))break;}catch{}await delay(100);}
+ let reader;for(let i=0;i<150;i++){try{reader=containers ? containers.presenceReader({installation:join(dir,'installation'),location:{directory:project}}) : createPresenceReader({directory:presenceDirectory(join(dir,'installation'),{directory:project})});if(reader.selected().has(session.id))break;}catch{}await delay(100);}
  assert.ok(reader?.selected().has(session.id),'mounted official TUI must emit selected-session lease: '+tuiOutput.replaceAll(password,'[fixture-secret]'));
  assert.ok(readdirSync(extractionDirectory).some(name=>/^\.bun-.*\.so$/.test(name)),'actual pinned TUI must extract its native shared library into the private rebuildable cache');
  // Lifecycle checks use the real TUI client RPC transport. Initial setup below
