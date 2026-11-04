@@ -47,7 +47,9 @@ test('CI runs official host tests in a bounded parallel job with verified fixtur
   assert.match(job, /09f44302c10fd036912f59c81fd1aef5df45dd06f649197f9dfc9bbe2a79614e  opencode-linux-x64\.tar\.gz/);
   assert.match(job, /sha256sum --check --strict/);
   assert.ok(job.indexOf('sha256sum --check --strict') < job.indexOf('tar --extract'));
-  assert.match(job, /ref: 72f5d2d1b834e02cfb6b2f7dc11c6f1a55729344/);
+  assert.match(job, /ref: \$\{\{ steps\.psst-source\.outputs\.commit \}\}/);
+  assert.match(job, /git ls-remote https:\/\/github\.com\/matuto-ai\/psst\.git refs\/heads\/main/);
+  assert.match(job, /node scripts\/test-source\.mjs/);
   assert.match(job, /run: node scripts\/test\.mjs host/);
   assert.match(job, /OPENCODE_BINARY: \$\{\{ runner\.temp \}\}\/opencode-host\/opencode/);
   assert.match(job, /PSST_APPROVAL_BROKER_DIR: \$\{\{ github\.workspace \}\}\/\.test-fixtures\/psst-approval/);
