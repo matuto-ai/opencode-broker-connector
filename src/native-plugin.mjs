@@ -8,6 +8,8 @@ import { createNativeDelivery, nativeSessionBinding, HOST_VERSION } from './nati
 import { openNativeIncarnation } from './native-incarnation.mjs';
 import { openNativeInbox } from './native-inbox.mjs';
 import { withNativeLock } from './native-lock.mjs';
+import { readExistingConnection } from './enrollment.mjs';
+import { SETUP_RPC } from './setup-rpc.mjs';
 import { installationDirectory } from './installation.mjs';
 import { createToolScope } from './tool-scope.mjs';
 import { createNativeSetup, SETUP_TOOLS } from './native-setup.mjs';
@@ -26,12 +28,19 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     || typeof ctx?.storage?.get !== 'function' || typeof ctx?.storage?.set !== 'function' || typeof ctx?.storage?.scan !== 'function'
     || typeof ctx?.tool?.transform !== 'function' || typeof ctx?.event?.subscribe !== 'function') throw new Error('psst_host_capability_unavailable');
   const directory = realpathSync(ctx.location.directory);
+  let authorizationExpired = false;
+  const readCurrentSettings = async options => {
+    try { const settings = await loadSettings(options); authorizationExpired = settings?.authorizationExpired === true; return settings; }
+    catch (error) { if (error.code === 'credential_expired') authorizationExpired = true; throw error; }
+  };
   const hostID = await withNativeLock(setupOptions.directory ?? installationDirectory(), 'host-anchor', async () => {
-    return recoverHostAnchor({ storage: ctx.storage, session: ctx.session, settings: await loadSettings(), directory, workspaceID: ctx.location.workspaceID });
+    const settings = await readCurrentSettings({ identityRecovery: setupEnabled });
+    authorizationExpired = settings?.authorizationExpired === true;
+    return recoverHostAnchor({ storage: ctx.storage, session: ctx.session, settings, directory, workspaceID: ctx.location.workspaceID });
   });
   const registryPrefix = 'psst-v2-session:' + createHash('sha256').update(canonical({ directory, workspaceID: ctx.location.workspaceID ?? null })).digest('hex') + ':';
   if (!validID(hostID)) throw new Error('psst_host_binding_unavailable');
-  const sessions = new Map(), blocked = new Set(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
+  const sessions = new Map(), preparing = new Map(), blocked = new Set(), authorizationBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
   let disposed = false, events, setup, presenceTimer, synchronizing;
   const presence = presenceFactory({ directory: presenceDirectory(setupOptions.directory ?? installationDirectory(), ctx.location, { create: true }) });
   const selected = sessionID => { try { return presence.selected().has(sessionID); } catch { return false; } };
@@ -49,8 +58,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       || realpathSync(info.location.directory) !== directory || info.location.workspaceID !== ctx.location.workspaceID) throw new Error('native_session_mismatch');
     return info;
   }
-  async function close(sessionID) {
-    const state = sessions.get(sessionID);
+  async function close(sessionID, state = sessions.get(sessionID)) {
     if (!state) return;
     if (state.closing) return state.closing;
     state.controller.abort();
@@ -61,24 +69,28 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       if (!state.adapter) state.inbox?.close();
       state.incarnation?.close();
       if (sessions.get(sessionID) === state) sessions.delete(sessionID);
+      if (preparing.get(sessionID) === state) preparing.delete(sessionID);
     })();
     return state.closing;
   }
-  async function connect(sessionID) {
-    if (disposed || blocked.has(sessionID) || archived.has(sessionID)) throw new Error('native_plugin_closed');
+  async function connect(sessionID, { candidateSettings } = {}) {
+    const target = candidateSettings ? preparing : sessions;
+    if (disposed || blocked.has(sessionID) || !candidateSettings && authorizationBlocked.has(sessionID) || archived.has(sessionID)) throw new Error('native_plugin_closed');
     if (!selected(sessionID)) throw new Error('native_session_not_selected');
-    let state = sessions.get(sessionID);
+    let state = target.get(sessionID);
     if (state) { await state.starting; if (state.closing) throw new Error('native_session_closing'); return state; }
     if (sessions.size >= 64) throw new Error('native_session_limit');
     state = { controller: new AbortController(), lifetime: Symbol('native host session') };
-    sessions.set(sessionID, state);
+    target.set(sessionID, state);
     state.starting = (async () => {
       const info = await getInfo(sessionID, state.controller.signal);
       const nativeBinding = nativeSessionBinding(info, hostID);
-      const settings = await loadSettings();
+      const settings = candidateSettings ?? await readCurrentSettings();
+      state.settings = settings;
       if (!settings || disposed || blocked.has(sessionID) || state.controller.signal.aborted) throw new Error('psst_connect_required');
       const valid = async () => {
-        if (disposed || !selected(sessionID) || blocked.has(sessionID) || state.controller.signal.aborted || sessions.get(sessionID) !== state
+        if (settings.enrollment && Date.parse(settings.enrollment.expiresAt) <= Date.now()) return null;
+        if (disposed || !selected(sessionID) || blocked.has(sessionID) || state.controller.signal.aborted || sessions.get(sessionID) !== state && preparing.get(sessionID) !== state
           || settings.enrollment && Date.parse(settings.enrollment.expiresAt) <= Date.now()) return null;
         try {
           const now = await getInfo(sessionID, state.controller.signal);
@@ -101,8 +113,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         operationContext: context => ({ operationId: canonical({ hostID, sessionID, messageID: context.messageID, callID: context.callID }), operationStartedAt: context.operationStartedAt }),
         onDiagnostic: entry => {
           diagnostic(entry.code);
-          if (entry.code === 'native_binding_unavailable' || entry.code === 'session_expired' && state.delivery) queueMicrotask(() => void close(sessionID).catch(() => {}));
-          if (['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) { blocked.add(sessionID); queueMicrotask(() => void close(sessionID).catch(() => {})); }
+          if (entry.code === 'native_binding_unavailable' || entry.code === 'session_expired' && state.delivery) queueMicrotask(() => void close(sessionID, state).catch(() => {}));
+          if (['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) { if (sessions.get(sessionID) === state) authorizationBlocked.set(sessionID, entry.code); queueMicrotask(() => void close(sessionID, state).catch(() => {})); }
         } });
       try { await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions })); break; }
       catch (error) {
@@ -115,36 +127,93 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       }
       if (!await valid()) throw new Error('native_session_mismatch');
       state.delivery = deliveryFactory({ session: ctx.session, client: state.client, inbox: state.inbox, binding: nativeBinding,
-        signal: state.controller.signal, verify: valid, available: () => selected(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
-      state.delivery.start();
+        signal: state.controller.signal, verify: valid, available: () => sessions.get(sessionID) === state && selected(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
+      if (!candidateSettings) state.delivery.start();
       return state;
     })();
     try { return await state.starting; }
     catch (error) {
       // Storage uncertainty is terminal for automatic restore in this plugin
       // lifetime. A deliberate restart re-reads the durable pointer first.
-      if (error.code === 'native_incarnation_uncertain') blocked.add(sessionID);
+      if (!candidateSettings && error.code === 'native_incarnation_uncertain') blocked.add(sessionID);
       state.controller.abort(); await state.delivery?.stop(); await state.adapter?.stop();
       if (!state.adapter) state.inbox?.close();
       state.incarnation?.close();
       if (sessions.get(sessionID) === state) sessions.delete(sessionID);
+      if (preparing.get(sessionID) === state) preparing.delete(sessionID);
       throw error;
     }
+  }
+  // Prepare the approved candidate without native delivery while the previous
+  // authorization stays live. Only the exact pending-flow CAS promotes it. Old
+  // credential-bound journals remain intact; explicit replacement never adopts
+  // an inbox belonging to another authority.
+  async function activate({ sessionID, connectionFile, commit, signal }) {
+    const settings = await readExistingConnection(connectionFile);
+    const previous = sessions.get(sessionID);
+    await previous?.starting;
+    const same = previous && canonical({ broker: previous.settings.broker, stateDirectory: previous.settings.stateDirectory })
+      === canonical({ broker: settings.broker, stateDirectory: settings.stateDirectory });
+    if (same) { if (signal.aborted) throw new Error('psst_setup_cancelled'); await commit(); return previous; }
+    let candidate;
+    const cancel = () => preparing.get(sessionID)?.controller.abort();
+    signal.addEventListener('abort', cancel, { once: true });
+    try {
+      if (signal.aborted) throw new Error('psst_setup_cancelled');
+      candidate = await connect(sessionID, { candidateSettings: settings });
+      if (signal.aborted || candidate.controller.signal.aborted || !selected(sessionID)) throw new Error('psst_setup_cancelled');
+      await commit();
+      // No await between committed selection and map promotion. Starting native
+      // delivery is synchronous and has no submission side effect until its tick.
+      preparing.delete(sessionID); sessions.set(sessionID, candidate); authorizationBlocked.delete(sessionID); authorizationExpired = false;
+      candidate.delivery.start();
+    } catch (error) {
+      if (candidate && sessions.get(sessionID) !== candidate) await close(sessionID, candidate);
+      throw error;
+    } finally { signal.removeEventListener('abort', cancel); }
+    if (previous) await close(sessionID, previous);
+    return candidate;
   }
   const catalog = nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive');
   async function dispose() {
     if (disposed) return;
     disposed = true; clearInterval(presenceTimer); controller.abort();
-    for (const state of sessions.values()) state.controller.abort();
+    for (const state of [...sessions.values(), ...preparing.values()]) state.controller.abort();
     await setup?.stop();
     await toolScope.close();
-    await Promise.all([...sessions.keys()].map(close));
+    await Promise.all([...sessions, ...preparing].map(([id, state]) => close(id, state)));
     await Promise.all(registrations.map(item => item.dispose()));
     await events?.catch(() => {});
   }
-  const status = sessionID => { const state = sessions.get(sessionID); return { host_version: HOST_VERSION, mode: 'native_automatic', connected: !!state?.delivery && selected(sessionID), availability: selected(sessionID) ? 'selected' : 'inactive', client_id: state?.client?.inbox?.identity?.client_id ?? null, last_delivery_status: state?.deliveryStatus ?? null, receipt_semantics: 'durable_native_admission_not_model_read' }; };
-  if (setupEnabled) setup = createNativeSetup({ storage: ctx.storage, verify: async id => { try { return await getInfo(id); } catch { return null; } }, connect, status, signal: controller.signal, ...setupOptions });
+  const status = sessionID => {
+    const state = sessions.get(sessionID);
+    const expired = state?.settings ? !!state.settings.enrollment && Date.parse(state.settings.enrollment.expiresAt) <= Date.now() : authorizationExpired;
+    const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
+    const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
+    return { host_version: HOST_VERSION, mode: 'native_automatic',
+      connected: !!state?.delivery && selected(sessionID) && authorization === 'active',
+      availability: selected(sessionID) ? 'selected' : 'inactive', authorization_state: authorization,
+      client_id: state?.client?.inbox?.identity?.client_id ?? null,
+      last_delivery_status: state?.deliveryStatus ?? null, receipt_semantics: 'durable_native_admission_not_model_read' };
+  };
+  if (setupEnabled) setup = createNativeSetup({ storage: ctx.storage, verify: async id => { try { if (!selected(id)) return null; const info = await getInfo(id); return selected(id) ? info : null; } catch { return null; } }, connect, activate, status, signal: controller.signal, ...setupOptions });
   try {
+    if (setup && ctx.rpc?.register) {
+      const invoke = async (name, input, rpcContext) => {
+        if (!selected(input.sessionID)) throw new Error('native_session_not_selected');
+        try { return await setup.invoke(name, name === 'broker_setup' ? { broker_url: input.broker_url }
+          : name === 'broker_setup_status' && input.broker_url ? { broker_url: input.broker_url } : {}, {
+          sessionID: input.sessionID, signal: rpcContext.signal,
+          confirmedReplacement: input.replacement_confirmed === true,
+          replacementRequestId: input.replacement_request_id,
+        }); } catch { return { state: 'setup_blocked', ...status(input.sessionID) }; }
+      };
+      registrations.push(await ctx.rpc.register(SETUP_RPC, {
+        status: (input, context) => invoke('broker_setup_status', input, context),
+        setup: (input, context) => invoke('broker_setup', input, context),
+        cancel: (input, context) => invoke('broker_cancel_setup', input, context),
+      }));
+    }
     // Read all known tombstones before publishing hooks/tools or starting any
     // manifest restoration. A disabled session must never be resurrected.
     let cursor, scanned = 0;
@@ -213,7 +282,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         if (['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {
           if (event.type === 'session.archived') archived.add(sessionID); else blocked.add(sessionID); state?.controller.abort();
           if (validID(sessionID)) await ctx.storage.set(registryPrefix + sessionID, { sessionID, enabled: false, reason: event.type === 'session.archived' ? 'archived' : 'disabled' });
-          await close(sessionID);
+          await Promise.all([close(sessionID), close(sessionID, preparing.get(sessionID))]);
         }
         if (event.type === 'session.unarchived' && archived.has(sessionID) && !blocked.has(sessionID)) {
           archived.delete(sessionID);
@@ -229,9 +298,12 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       if (disposed || synchronizing) return;
       synchronizing = (async () => {
         let active; try { active = presence.selected(); } catch { active = new Set(); diagnostic('native_selection_unavailable'); }
-        await Promise.all([...sessions.keys()].filter(id => !active.has(id)).map(close));
+        await Promise.all([...sessions.keys()].filter(id => !active.has(id)).map(id => close(id)));
         if (disposed) return;
-        const settings = await loadSettings();
+        // Candidate recovery is independent of a valid working installation.
+        // A corrupt pending flow cannot suppress restoration of its old mailbox.
+        try { await setup?.resume(); } catch { diagnostic('native_setup_restore_unavailable'); }
+        const settings = await readCurrentSettings();
         for (const record of readNativeBindings(settings)) {
           const b = record.binding;
           if (active.has(b.sessionID) && b.hostID === hostID && b.location.directory === directory
@@ -248,6 +320,6 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     await synchronize();
     presenceTimer = setInterval(() => void synchronize(), 500); presenceTimer.unref?.();
     void setup?.resume().catch(() => diagnostic('native_setup_restore_unavailable'));
-    return { dispose, connect, status };
+    return { dispose, connect, status, activate };
   } catch (error) { await dispose(); throw error; }
 }

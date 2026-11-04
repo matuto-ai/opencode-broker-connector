@@ -29,20 +29,34 @@ and a readable `PSST_APPROVAL_BROKER_DIR/test/approval-tls-fixture.mjs`. Missing
 prerequisites fail the stage before test execution. Both existing `current-host`
 tests then run against the official server and its actual TUI in a PTY:
 
-1. The freshly packed root plugin is loaded by the native plugin manager. The
+1. The freshly packed root plugin loads through the native plugin manager. The
    selected conversation obtains its TUI lease, an inactive conversation is not
    woken, and restoring selection automatically admits a real broker message to
    native synthetic inbox/context without changing the selected agent or model.
-2. Explicit URL-only setup creates a pending request, with no OpenCode broker
-   connection before approval. Real local TLS admin approval permits native
-   registration and the same automatic admission path.
+2. Actual keyboard `/psst-setup` opens one broker-URL text field in the official
+   TUI. No native connection exists before exact-request TLS admin approval.
+   Native RPC probes additionally cover cancellation, denial, exact-request
+   replacement, preservation of the working authorization and admin revocation
+   without automatic re-enrollment.
 
-The fixture driver invokes the native tool/command and router APIs. It does not
-paste terminal input or manufacture human approval from a peer message. The
-provider deliberately does not exist, so these are **real native admission and
-routing tests, not authenticated model-response acceptance**. They also do not
-prove the published npm installer, Docker host recreation, or the full concurrent
-session acceptance matrix. Issue #8 remains open for those outstanding gates.
+The approval case also restarts while its exact request is pending and approves
+it before the TUI reconnects, proving selection recovery resumes without another
+enrollment. Both tests restart the actual server and TUI with the documented private/native
+roots, retain the exact native conversation and broker identity, recover unread
+broker delivery and give a fresh conversation an independent address. They also
+retain queued native human input, leave a native permission request unapproved,
+and verify that a failed execution is not silently woken again.
+
+The fixture driver uses native tool/command/router/RPC APIs for lifecycle cases;
+the initial setup dialog is exercised using actual PTY keyboard input. Human admin
+approval comes from the real disposable form-login UI, never from peer content.
+The selected provider deliberately does not exist. These are **real native
+admission, routing, restart and failure tests, not authenticated model-response
+acceptance**. They do not qualify an active authenticated model toolchain or
+in-flight model abort. The separate 30-session Docker gate uses a synthetic native API. The actual-host
+container gate below instead runs this official CLI/TUI scenario inside removed
+and recreated containers; neither gate proves authenticated model execution.
+See [the complete evidence boundary](setup-acceptance.md).
 
 ## Local reproduction
 
@@ -61,3 +75,53 @@ The default `npm test` retains optional host probes for developers without the C
 CI's dedicated host stage cannot silently pass with either prerequisite absent.
 The published-package installer probe remains a separate opt-in gate requiring
 `PSST_OPENCODE_PACKAGE_SPEC`; this job does not claim that release proof.
+
+### Actual-host container persistence gate
+
+The same `current-host.test.mjs` scenarios run a second time with
+`PSST_OPENCODE_DOCKER=1`. This launches the checksum-verified official binary,
+not the synthetic host fixture, in a fresh container for every server and TUI
+invocation. The TUI receives its own container PTY and joins only the immutable
+PID namespace of its confirmed running, fixture-owned server container. Host PID
+namespace sharing is never enabled. Both containers are removed
+before reopening, and Docker container IDs must change. The runner records owned
+names before creation, confirms creation in the supervising test process before
+starting any killable attach wrapper, checks removal at restart, and force-cleans
+owned leftovers on failure. A leftover at normal teardown fails the test even after cleanup.
+
+Only the disposable fixture tree is a writable bind mount; `/tmp` remains
+ephemeral and `noexec,nosuid,nodev`. The pinned Bun executable extracts OpenTUI
+native libraries into an owned 0700 `cache/native-assets` subdirectory using
+an explicit `BUN_TMPDIR` value. This executable extraction location is
+inside the existing fixture bind, not a relaxation of `/tmp` or root permissions.
+It is deleted with XDG cache and recreated before each launch; tests require
+actual native shared-library extraction there before and after cache rebuilding.
+The verified
+binary, runtime dependencies, and broker public CA are read-only mounts. No user
+home, checkout, Docker socket, or runner token is mounted. Host networking is used
+only so the official server/TUI can reach the ephemeral loopback TLS broker and
+host API; processes run with the runner's UID/GID, dropped capabilities, and
+`no-new-privileges`.
+
+Persistence retains the same test HOME, XDG config/data/state, private connector
+installation, absolute project path and UID. XDG cache is deleted before reopening.
+The gate checks the same exact native session, broker identity, unread admission,
+setup ownership, keyboard dialog, denial/replacement, and revocation scenarios as
+the process gate. It does not qualify an authenticated provider response or a
+running model/toolchain. The separate synthetic Docker fixture remains distinct.
+
+A failed or timed-out create is reconciled only after a positively observed owned
+container can be removed. If the bounded reconciliation cannot establish its
+outcome, the gate fails and retains the fixture plus a private ownership receipt
+outside it. The failure names both retained paths without printing credentials;
+an absent inspect result is never treated as proof that a late create is impossible.
+Executable fake-Docker tests cover that failure layer cheaply, but are not real
+Docker acceptance. Local environments without Docker cannot qualify this gate.
+
+The test observer runs short `docker exec` Node probes in that owned server
+container, importing the packed production presence reader. PID, process-start
+and boot-identity validation therefore runs in the same namespace as both native
+processes, not in the outer CI runner. It never interprets raw leases or spoofs
+process liveness. Each probe verifies the current server ID, ownership label and
+running state, so observations cannot be reused across removed generations.
+The production plugin independently uses its unchanged presence checks.

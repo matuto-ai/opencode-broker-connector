@@ -1,0 +1,113 @@
+# URL-only setup and persistence
+
+## Install, configure, use
+
+The scoped 0.6.0 package is an unreleased source candidate. After publication,
+install it using the single native plugin-manager command in the README. The
+same package loads its server and TUI entries; do not install a second wrapper.
+
+1. Select a conversation in the local OpenCode 2.2.5 TUI. Run `/psst-setup` and
+   enter only the HTTPS broker origin.
+2. Open the displayed broker `/admin` page. Its form login and exact-request
+   approval are human actions. Pending setup is not a connection.
+3. Once approved, use the existing send/client tools. Incoming peer data enters
+   the native synthetic queue automatically for the selected conversation.
+   `/psst-status` reports status; `/psst-cancel-setup` pauses a pending local flow.
+
+Missing configuration never starts enrollment. Pending retries retain the same
+candidate and request, including uncertain network results. Private candidate
+persistence precedes the first enrollment POST. Restart only reads or polls an
+already durable request; it cannot generate a request or rotate credentials.
+If the server starts before the owner TUI, selecting that exact owner later
+resumes GET-only polling. Fatal poll, attachment or selection failures pause the
+flow; selection changes alone cannot retry them. Explicit setup is required.
+
+## Replacement and recovery
+
+The native dialog asks before replacing a terminal request and fences that
+confirmation to its exact request ID. Model tools cannot supply this confirmation.
+The prior authorization remains selected and usable until the approved candidate
+has attached and the original selection revision still matches. Cancellation,
+late results, failed attachment or an intervening selection cannot promote it.
+Retrying an approved but uncommitted candidate reuses its receipt and original
+selection baseline rather than silently replacing a newer choice.
+
+An explicit replacement creates a new credential-bound identity. It retains the
+old authorization's local inbox and history, but does not move unread messages or
+uncertain sends across authorities. Ordinary plugin upgrade or restart, without
+replacement, retains the original credential, mailbox, addresses and pending data.
+
+Denied, expired, paused and pending states are restored from private records.
+An expired but fully validated receipt can be inspected only for exact identity
+recovery, allowing the native setup UI to offer replacement. It is never accepted
+for connection or selection. Wrong token hashes, origin/type mismatches, missing
+receipts and corrupt files remain fatal. Broker rejection is reported separately
+from validated expiry and from protocol/retry failures.
+
+## Paths for disposable runtimes
+
+The shared installation directory is, in precedence order:
+
+- `PSST_OPENCODE_CONFIG_DIR`;
+- `$OPENCODE_CONFIG_DIR/psst`;
+- `$XDG_CONFIG_HOME/opencode/psst`, default `~/.config/opencode/psst`.
+
+Persist the complete directory, including selected and pending records, approval
+receipts, credentials, binding manifests and inbox journals. Keep the same absolute
+path and UID, directory permissions 0700 and file permissions 0600. Do not mount a
+subdirectory that omits receipts or owner locks. TUI and server must share this
+local private installation directory for active-conversation signaling.
+
+Installation sharing does not recreate OpenCode conversation history. To reopen
+an existing native conversation, also retain that host's OpenCode configuration,
+native data and state roots under the same project/workspace location. The pinned
+host uses `XDG_CONFIG_HOME/opencode`, `XDG_DATA_HOME/opencode` and
+`XDG_STATE_HOME/opencode` (default `~/.config/opencode`, `~/.local/share/opencode`
+and `~/.local/state/opencode`). An `OPENCODE_CONFIG_DIR` override must also remain
+available. Keep native host data separate for intentionally independent hosts;
+share the Psst installation, not their entire OpenCode database.
+
+A new host receives a fresh anchor only after native lookup proves all relevant
+previous sessions absent, or the persisted bindings belong elsewhere. Matching
+native history recovers the existing anchor. Unknown lookups, changed live
+bindings, multiple matching anchors or corruption do not permit a reset. Classic
+journals without a current native binding are retained and require explicit
+migration work; they are never silently adopted.
+
+## Evidence and remaining acceptance
+
+Required CI combines independent layers; they are not interchangeable:
+
+- Local lifecycle tests cover duplicate/uncertain results, cancellation around
+  persistence and native checks, late approval, original-selection CAS,
+  attachment rollback, corruption, validated expiry, and 30 independently owned
+  SQLite mailboxes with identical labels.
+- The TLS persistence gate removes/recreates three Docker containers, retains the
+  private installation, and reconnects 30 same-name sessions using one enrollment
+  POST. It verifies unread preservation, address isolation and no repeated native
+  admission using a synthetic native API. Local process-only preflight is labeled
+  separately and is not Docker proof.
+- A clean checkout of v0.5.1 commit
+  `04160a087e5aeb5237ab74ebddfcc720aa72327c` creates the original credential and
+  journal using its own reference implementation. The candidate preserves those
+  files, mailbox path, identity, unread message and uncertain outgoing key. This
+  uses synthetic enrollment/native APIs with a real loopback HTTP broker.
+- The official OpenCode server and actual TUI use real verified TLS admin approval.
+  They exercise restart, unread admission, independent session addresses, native
+  RPC cancellation/replacement, queued human input, permission preservation and
+  failed-execution behavior. A second required pass runs these same official-host
+  scenarios in newly created server and TUI Docker containers, confirms their
+  distinct IDs and complete removal before reopening, and retains the documented
+  private/native roots with the same UID. This actual-host gate is separate from
+  the synthetic 30-session gate above. Fake-Docker cleanup tests are only local
+  preflight; actual container execution requires Docker CI. See
+  [official-host CI](official-host-ci.md).
+
+The exact scoped package is not yet published, so the published-package installer
+probe remains opt-in. Publishing or changing account credentials is not part of
+this candidate. Authenticated provider execution, active model toolchain/abort
+behavior and automatic real model response still require an authorized native
+host/provider. A nonexistent provider proves native admission and failure
+handling, not successful model processing. Issue #8 remains open until its
+remaining authenticated and release-dependent evidence is recorded; no synthetic
+fixture is presented as that evidence.

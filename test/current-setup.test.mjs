@@ -48,10 +48,103 @@ test('actual installation selector rechecks native binding after private-file va
 });
 
 test('renamed namespace cannot resume or replace a pending request whose native owner is unavailable',async t=>{
- const {readFileSync}=await import('node:fs');const f=await fixture(t);await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.stop();
+ const {readFileSync,writeFileSync}=await import('node:fs');const f=await fixture(t);await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.stop();
+ const legacy=readPending(f.directory);delete legacy.owner;writeFileSync(join(f.directory,'pending.json'),JSON.stringify(legacy));
  const before=readFileSync(join(f.directory,'pending.json'));f.stored.clear();f.calls.length=0;
  const second=createNativeSetup(f.options);t.after(()=>second.stop());await second.resume();
  assert.equal((await second.invoke('broker_setup_status',{},f.context)).state,'setup_owner_recovery_required');
  await assert.rejects(()=>second.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/setup_owner_recovery_required/);
  assert.deepEqual(f.calls,[]);assert.deepEqual(readFileSync(join(f.directory,'pending.json')),before);
+});
+
+test('durable exact owner resumes after native namespace loss, while changed native binding cannot resume',async t=>{
+ const f=await fixture(t);await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.stop();f.stored.clear();f.calls.length=0;
+ const second=createNativeSetup(f.options);t.after(()=>second.stop());await second.resume();await delay(20);
+ assert.equal(f.calls.includes('begin'),false);assert.ok(f.calls.includes('poll'));assert.equal((await second.invoke('broker_setup_status',{},f.context)).request_id,'same-request');
+ await second.stop();f.calls.length=0;const changed=createNativeSetup({...f.options,verify:async id=>({id,projectID:'other',location:{directory:f.directory},time:{created:2}})});t.after(()=>changed.stop());await changed.resume();await delay(20);assert.deepEqual(f.calls,[]);await assert.rejects(()=>changed.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/mismatch/);
+});
+test('restart hydrates denied, expired and paused status without minting or polling',async t=>{
+ for(const state of ['denied','expired','pending']) {
+  let saved;const f=await fixture(t,{readApprovalState:()=>saved});await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.invoke('broker_cancel_setup',{},f.context);await f.setup.stop();
+  saved={state,requestId:'same-request'};f.calls.length=0;const second=createNativeSetup(f.options);t.after(()=>second.stop());await second.resume();const result=await second.invoke('broker_setup_status',{},f.context);
+  assert.equal(result.state,state==='pending'?'paused':state);assert.equal(result.request_id,'same-request');assert.deepEqual(f.calls,[]);
+ }
+});
+test('terminal replacement requires native confirmation of exact request, then creates one new candidate',async t=>{
+ let began;const f=await fixture(t,{readApprovalState:()=>({state:'denied',requestId:'old'}),beginApproval:async options=>{began=options;return{state:'pending',requestId:'new'};},pollApproval:async()=>({state:'pending',requestId:'new'})});
+ const preflight=await f.setup.invoke('broker_setup_status',{broker_url:'https://fixture.invalid'},f.context);assert.equal(preflight.replacement_confirmation_required,true);
+ for(const context of [f.context,{...f.context,confirmedReplacement:true,replacementRequestId:'changed'}]) {
+  const result=await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},context);assert.equal(result.replacement_confirmation_required,true);assert.equal(began,undefined);
+ }
+ const result=await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},{...f.context,confirmedReplacement:true,replacementRequestId:'old'});assert.equal(result.request_id,'new');assert.equal(began.replaceRequestId,'old');assert.equal(readPending(f.directory).requestId,'new');
+});
+test('approved candidate attachment failure preserves selection and retry reuses same approved request',async t=>{
+ let saved,begins=0,attempts=0;const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async options=>{begins++;assert.equal(options.replaceRequestId,undefined);saved={state:'approved',requestId:'same-request',connectionFile:'/candidate'};return saved;}});await f.setup.stop();
+ const setup=createNativeSetup({...f.options,activate:async({commit})=>{if(++attempts===1)throw new Error('candidate_unavailable');await commit();}});t.after(()=>setup.stop());
+ await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/candidate_unavailable/);assert.equal(f.calls.includes('select'),false);
+ const status=await setup.invoke('broker_setup_status',{broker_url:'https://fixture.invalid'},f.context);assert.equal(status.replacement_confirmation_required,false);
+ await setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);assert.equal(begins,2);assert.equal(attempts,2);assert.equal(f.calls.filter(x=>x==='select').length,1);
+});
+
+test('cancel during durable native owner save prevents a later enrollment POST',async t=>{
+ const f=await fixture(t);await f.setup.stop();let entered,release;const ready=new Promise(r=>entered=r);
+ const setup=createNativeSetup({...f.options,storage:{...f.options.storage,set:async(k,v)=>{await f.options.storage.set(k,v);entered();await new Promise(r=>release=r);}}});t.after(()=>setup.stop());
+ const pending=setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await ready;await setup.invoke('broker_cancel_setup',{},f.context);release();await assert.rejects(()=>pending,/cancelled/);assert.equal(f.calls.includes('begin'),false);assert.equal(readPending(f.directory).paused,true);
+});
+
+test('cancel before durable owner allocation stops setup without candidate files or POST',async t=>{
+ const f=await fixture(t);await f.setup.stop();let entered,release;const ready=new Promise(r=>entered=r);
+ const setup=createNativeSetup({...f.options,loadHelper:async()=>{entered();await new Promise(r=>release=r);return await f.options.loadHelper();}});t.after(()=>setup.stop());
+ const pending=setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await ready;assert.equal(readPending(f.directory),null);await setup.invoke('broker_cancel_setup',{},f.context);release();await assert.rejects(()=>pending,/cancelled/);assert.equal(readPending(f.directory),null);assert.equal(f.calls.includes('begin'),false);
+});
+
+test('approved retry retains original selection baseline and cannot rebase over a newer authorization',async t=>{
+ const {writeFileSync}=await import('node:fs');let saved;const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async()=>saved??={state:'approved',requestId:'same-request',connectionFile:'/candidate'}});await f.setup.stop();let attempts=0,revision;
+ const setup=createNativeSetup({...f.options,activate:async({commit})=>{if(++attempts===1)throw Error('attach_failed');await commit();},select:async input=>{revision=input.expectedRevision;throw Error('psst_selection_changed');}});t.after(()=>setup.stop());
+ await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/attach_failed/);
+ writeFileSync(join(f.directory,'installation.json'),JSON.stringify({format:'psst-opencode-installation-v1',revision:'other-choice',connectionFile:'/other-authorization'}),{mode:0o600});
+ await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/selection_changed/);assert.equal(revision,null);assert.equal(readPending(f.directory).expectedRevision,null);
+});
+test('cancel during final native binding check cannot create an approval request',async t=>{
+ const f=await fixture(t);await f.setup.stop();let checks=0,entered,release;const ready=new Promise(r=>entered=r);
+ const setup=createNativeSetup({...f.options,verify:async id=>{if(++checks===3){entered();await new Promise(r=>release=r);}return f.options.verify(id);}});t.after(()=>setup.stop());
+ const pending=setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await ready;await setup.invoke('broker_cancel_setup',{},f.context);release();await assert.rejects(()=>pending,/cancelled/);assert.equal(f.calls.includes('begin'),false);
+});
+
+test('restart reconciles helper-persisted request after crash before response without a second POST',async t=>{
+ const {savePending}=await import('../src/installation.mjs');const f=await fixture(t,{readApprovalState:()=>({state:'pending',requestId:'durable-before-response'}),pollApproval:async()=>{f.calls.push('poll');return{state:'pending',requestId:'durable-before-response'};}});await f.setup.stop();
+ const info=await f.options.verify('one');const {canonical}=await import('../vendor/broker/src/protocol.mjs');savePending({directory:f.directory,brokerUrl:'https://fixture.invalid/',expectedRevision:null,owner:{sessionID:'one',binding:canonical({id:info.id,projectID:info.projectID,location:info.location,created:info.time.created})}});
+ const next=createNativeSetup(f.options);t.after(()=>next.stop());await next.resume();await delay(20);assert.equal(readPending(f.directory).requestId,'durable-before-response');assert.ok(f.calls.includes('poll'));assert.equal(f.calls.includes('begin'),false);
+});
+test('restart before replacement candidate exists never adopts prior approval or starts another POST',async t=>{
+ const {savePending}=await import('../src/installation.mjs');const {canonical}=await import('../vendor/broker/src/protocol.mjs');const f=await fixture(t,{readApprovalState:()=>({state:'approved',requestId:'prior',connectionFile:'/prior'})});await f.setup.stop();const info=await f.options.verify('one');
+ savePending({directory:f.directory,brokerUrl:'https://fixture.invalid/',expectedRevision:null,previousRequestId:'prior',owner:{sessionID:'one',binding:canonical({id:info.id,projectID:info.projectID,location:info.location,created:info.time.created})}});
+ const next=createNativeSetup(f.options);t.after(()=>next.stop());await next.resume();assert.equal(readPending(f.directory).paused,true);assert.equal(readPending(f.directory).requestId,null);assert.deepEqual(f.calls,[]);
+});
+test('retryable unknown enrollment result reconciles the durable request using GET only',async t=>{
+ let saved;const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async()=>{f.calls.push('begin');saved={state:'pending',requestId:'durable'};throw Object.assign(Error('transport_error'),{retryable:true,effect:'unknown'});},pollApproval:async()=>{f.calls.push('poll');return{state:'approved',requestId:'durable',connectionFile:'/candidate'};}});
+ await assert.rejects(()=>f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context),/transport_error/);await delay(30);assert.equal(f.calls.filter(x=>x==='begin').length,1);assert.ok(f.calls.includes('poll'));assert.ok(f.calls.includes('select'));assert.equal(readPending(f.directory).requestId,'durable');
+});
+
+test('terminal paused setup permits explicit replacement from another verified native conversation',async t=>{
+ let saved;const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async options=>{saved={state:'denied',requestId:options.replaceRequestId?'second':'first'};return saved;}});
+ await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);assert.equal(readPending(f.directory).paused,true);
+ const second={...f.context,sessionID:'two',confirmedReplacement:true,replacementRequestId:'first'};const result=await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},second);assert.equal(result.request_id,'second');assert.equal(readPending(f.directory).owner.sessionID,'two');
+});
+
+test('pending owner selected after startup resumes with GET only and paused owner stays paused',async t=>{
+ let saved={state:'pending',requestId:'same-request'};const f=await fixture(t,{readApprovalState:()=>saved,pollApproval:async()=>{f.calls.push('poll');return saved;}});await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);await f.setup.stop();f.calls.length=0;let selected=false;
+ const next=createNativeSetup({...f.options,verify:async id=>selected?f.options.verify(id):null});t.after(()=>next.stop());await next.resume();await delay(20);assert.deepEqual(f.calls,[]);
+ selected=true;saved={state:'approved',requestId:'same-request',connectionFile:'/candidate'};await next.resume();await delay(20);assert.ok(f.calls.includes('poll'));assert.ok(f.calls.includes('select'));assert.equal(f.calls.includes('begin'),false);
+ await next.invoke('broker_cancel_setup',{},f.context);await next.stop();f.calls.length=0;const paused=createNativeSetup(f.options);t.after(()=>paused.stop());await paused.resume();await delay(20);assert.deepEqual(f.calls,[]);
+});
+
+test('selection recovery never automatically retries fatal poll or candidate activation failure',async t=>{
+ for(const failure of ['poll','activation']) {
+  let saved={state:'pending',requestId:'same-request'},polls=0,activations=0;
+  const f=await fixture(t,{readApprovalState:()=>saved,beginApproval:async()=>saved,pollApproval:async()=>{polls++;if(failure==='poll')throw Error('invalid_response');return saved;}});await f.setup.stop();
+  const setup=createNativeSetup({...f.options,activate:async()=>{activations++;throw Error('psst_selection_changed');}});t.after(()=>setup.stop());await setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);saved={state:'approved',requestId:'same-request',connectionFile:'/candidate'};await delay(30);
+  assert.equal(readPending(f.directory).paused,true);const before={polls,activations};for(let i=0;i<5;i++){await setup.resume();await delay(15);}assert.deepEqual({polls,activations},before);
+  if(failure==='activation'){await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context));assert.equal(activations,before.activations+1,'only explicit setup retries attachment');}
+ }
 });

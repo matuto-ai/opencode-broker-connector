@@ -15,10 +15,17 @@ async function helper() {
 }
 
 /** Legacy environment mode may load an existing bundle, never issue credentials. */
-export async function readExistingConnection(path) {
+export async function readExistingConnection(path, { identityRecovery = false } = {}) {
   const settings = readConfig(path);
   if (settings.enrollmentReceiptRequired) {
-    settings.enrollment = (await helper()).readEnrollmentReceipt({ connectionFile: path, clientType: 'opencode' });
+    try { settings.enrollment = (await helper()).readEnrollmentReceipt({ connectionFile: path, clientType: 'opencode' }); }
+    catch (error) {
+      // The pinned helper checks receipt/token/type/origin integrity before its
+      // final expiry check. This mode is only for existing identity discovery,
+      // never connection, activation, selection or enrollment.
+      if (!identityRecovery || error.code !== 'credential_expired') throw error;
+      settings.authorizationExpired = true;
+    }
   }
   return settings;
 }

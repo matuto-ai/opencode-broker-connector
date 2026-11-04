@@ -128,3 +128,52 @@ test('explicit archive reason resumes after native unarchive but unknown disable
  const key=[...f.stored.keys()].find(k=>k.startsWith('psst-v2-session:'));f.stored.set(key,{sessionID:'one',enabled:false,reason:'archived'});
  const next=await setupNativePlugin(f.options);t.after(()=>next.dispose());await next.connect('one');assert.equal(next.status('one').client_id,id);
 });
+
+function candidateFile(f, name='candidate') {
+ const tokenFile=join(f.dir,name+'.token');writeFileSync(tokenFile,'fixture-secret',{mode:0o600});
+ const connectionFile=join(f.dir,name+'.json');writeFileSync(connectionFile,JSON.stringify({broker:{url:'https://fixture.invalid/',tokenFile},stateDirectory:join(f.dir,name+'-state')}),{mode:0o600});
+ return connectionFile;
+}
+test('explicit approved replacement attaches before CAS, switches live adapter and retains old mailbox',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const original=f.runtime.status('one').client_id,old=f.states[0],connectionFile=candidateFile(f);let committed=false;
+ await f.runtime.activate({sessionID:'one',connectionFile,signal:new AbortController().signal,commit:async()=>{
+  assert.equal(f.runtime.status('one').client_id,original,'old adapter is live through candidate attachment');
+  assert.equal(f.states.length,2,'candidate was independently attached before selection');assert.ok(await old.currentBinding());committed=true;
+ }});
+ assert.ok(committed);assert.notEqual(f.runtime.status('one').client_id,original);assert.equal(await old.currentBinding(),null);
+ const {existsSync}=await import('node:fs');assert.ok(existsSync(join(old.client.inbox.directory,'binding.json')),'old authority journal is retained, never adopted/deleted');
+ assert.equal((await f.runtime.connect('one')).client.inbox.identity.client_id,f.runtime.status('one').client_id);
+});
+test('replacement attachment failure or superseded selection leaves prior live adapter and no candidate delivery',async t=>{
+ for(const failure of ['attach','commit']) {
+  const f=await fixture(t);await f.runtime.dispose();let delivered=0,starts=0;
+  const runtime=await setupNativePlugin({...f.options,adapterFactory:args=>{const adapter=f.options.adapterFactory(args);return{...adapter,start:async metadata=>{if(++starts===2&&failure==='attach')throw new Error('candidate_unavailable');await adapter.start(metadata);}};},deliveryFactory:()=>({start(){delivered++;},stop:async()=>{},event(){}})});t.after(()=>runtime.dispose());
+  await runtime.connect('one');const original=runtime.status('one').client_id;let commits=0;
+  await assert.rejects(()=>runtime.activate({sessionID:'one',connectionFile:candidateFile(f),signal:new AbortController().signal,commit:async()=>{commits++;throw new Error('psst_selection_changed');}}),failure==='attach'?/candidate_unavailable/:/selection_changed/);
+  assert.equal(commits,failure==='attach'?0:1);assert.equal(runtime.status('one').client_id,original);assert.equal(delivered,1);assert.ok(await f.states[0].currentBinding());assert.equal(await f.states[1].currentBinding(),null);
+ }
+});
+test('replacement cancellation while attachment waits cannot commit or disturb working adapter',async t=>{
+ const f=await fixture(t);await f.runtime.dispose();let entered,release,starts=0;const ready=new Promise(r=>entered=r),caller=new AbortController();
+ const runtime=await setupNativePlugin({...f.options,adapterFactory:args=>{const adapter=f.options.adapterFactory(args);return{...adapter,start:async metadata=>{if(++starts===2){entered();await new Promise(r=>release=r);}await adapter.start(metadata);}};}});t.after(()=>runtime.dispose());
+ await runtime.connect('one');const original=runtime.status('one').client_id;let commits=0;
+ const pending=runtime.activate({sessionID:'one',connectionFile:candidateFile(f),signal:caller.signal,commit:async()=>{commits++;}});await ready;caller.abort();release();await assert.rejects(()=>pending);
+ assert.equal(commits,0);assert.equal(runtime.status('one').client_id,original);assert.ok(await f.states[0].currentBinding());
+});
+
+test('expired authorization retains exact old native anchor while setup remains available for explicit repair',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const anchor=f.stored.get('psst-v2-host-id'),oldID=f.runtime.status('one').client_id;await f.runtime.dispose();f.stored.clear();let recoveryReads=0;
+ const loadSettings=async options=>{if(options?.identityRecovery){recoveryReads++;return{...f.settings,authorizationExpired:true};}throw Object.assign(Error('credential_expired'),{code:'credential_expired'});};
+ const runtime=await setupNativePlugin({...f.options,setupEnabled:true,loadSettings});t.after(()=>runtime.dispose());assert.equal(recoveryReads,1);assert.equal(f.stored.get('psst-v2-host-id'),anchor);assert.ok(f.tools.has('broker_setup'));assert.equal(runtime.status('one').authorization_state,'expired');await assert.rejects(()=>runtime.connect('one'),/credential_expired/);assert.equal(f.states.length,1);assert.equal(f.states[0].identity.client_id,oldID);
+});
+
+test('old authorization expiry in another session cannot mark a committed replacement expired',async t=>{
+ const f=await fixture(t);f.settings.enrollment={expiresAt:new Date(Date.now()+60000).toISOString()};await f.runtime.connect('one');await f.runtime.connect('two');const old=f.states.find(s=>s.binding.sessionID==='two');
+ await f.runtime.activate({sessionID:'one',connectionFile:candidateFile(f),signal:new AbortController().signal,commit:async()=>{}});f.settings.enrollment.expiresAt=new Date(Date.now()-1000).toISOString();assert.equal(await old.currentBinding(),null);assert.equal(f.runtime.status('one').authorization_state,'active');assert.equal(f.runtime.status('two').authorization_state,'expired');
+});
+
+test('corrupt pending candidate cannot prevent independent working authorization from reconnecting',async t=>{
+ const f=await fixture(t);await f.runtime.connect('one');const original=f.runtime.status('one').client_id;await f.runtime.dispose();const pendingPath=join(f.dir,'installation','pending.json');writeFileSync(pendingPath,'{corrupt',{mode:0o600});const diagnostics=[];
+ const runtime=await setupNativePlugin({...f.options,setupEnabled:true,onDiagnostic:entry=>diagnostics.push(entry.code)});t.after(()=>runtime.dispose());assert.equal(runtime.status('one').connected,true);assert.equal(runtime.status('one').client_id,original);assert.ok(diagnostics.includes('native_setup_restore_unavailable'));const status=JSON.parse((await f.tools.get('broker_setup_status').execute({},{sessionID:'one',signal:new AbortController().signal})).content);assert.equal(status.state,'setup_blocked');assert.equal(status.connected,true);
+ const {readFileSync}=await import('node:fs');assert.equal(readFileSync(pendingPath,'utf8'),'{corrupt');const result=JSON.parse((await f.tools.get('broker_setup').execute({broker_url:'https://fixture.invalid'},{sessionID:'one',signal:new AbortController().signal})).content);assert.equal(result.state,'setup_blocked');assert.equal(runtime.status('one').client_id,original);
+});

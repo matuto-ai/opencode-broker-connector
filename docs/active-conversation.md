@@ -38,7 +38,9 @@ already-authorized conversation (and cause its normal automatic wake/cost).
 It cannot create an authorized native binding, supply credentials, change scopes,
 redirect an inbox to another session, or grant tool access. The server continues
 to own credentials and journals and independently verifies exact native bindings.
-There is no public activate RPC or credential exchange.
+There is no public activate RPC or credential exchange. The native setup RPC
+accepts only a selected session ID, broker URL and exact-request replacement
+confirmation; it cannot supply credentials or bypass broker admin approval.
 
 Archive suspension can resume after native unarchive. Explicit disabled records,
 and older disabled records whose reason is unknown, remain disabled; selection
@@ -48,8 +50,10 @@ never overrides them. Existing unread and uncertain operations remain intact.
 
 Unit and real HTTP-broker tests exercise availability, identity preservation and
 reconnection. The official package loader validates the same-package entries.
-These are not proof of an authenticated model response or acceptance in a user's
-interactive TUI; those remain separate end-to-end checks.
+Required official-host CI now exercises the actual TUI and URL dialog, native
+routing/restart and human-input/permission preservation. It deliberately uses a
+nonexistent provider, so authenticated model response and active toolchain/abort
+acceptance remain separate end-to-end checks. See [setup acceptance](setup-acceptance.md).
 
 ## Display metadata
 

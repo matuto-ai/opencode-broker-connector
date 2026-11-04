@@ -32,9 +32,9 @@ export function readSelection(directory = installationDirectory()) {
   } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   return read(join(directory, 'installation.json'));
 }
-export async function readInstallation(directory = installationDirectory()) {
+export async function readInstallation(directory = installationDirectory(), readOptions) {
   const selected = readSelection(directory);
-  return selected ? readExistingConnection(selected.connectionFile) : undefined;
+  return selected ? readExistingConnection(selected.connectionFile, readOptions) : undefined;
 }
 /** No network. Compare-and-swap fences concurrent UI flows; never deletes old bundles/inboxes. */
 export async function selectInstallation({ directory = installationDirectory(), connectionFile, expectedRevision, signal, pendingFlowId, verify }) {
@@ -77,6 +77,10 @@ function readPendingFile(directory) {
     if (value.format !== 'psst-opencode-pending-v1' || typeof value.flowId !== 'string' || typeof value.paused !== 'boolean'
       || value.expectedRevision !== null && typeof value.expectedRevision !== 'string'
       || value.requestId !== null && typeof value.requestId !== 'string'
+      || value.previousRequestId !== undefined && value.previousRequestId !== null && typeof value.previousRequestId !== 'string'
+      || value.owner !== undefined && (!value.owner || Object.keys(value.owner).sort().join(',') !== 'binding,sessionID'
+        || typeof value.owner.sessionID !== 'string' || value.owner.sessionID.length > 256
+        || typeof value.owner.binding !== 'string' || value.owner.binding.length > 4096)
       || url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw new Error();
     return value;
   } catch (error) { if (error.code === 'ENOENT') return null; throw new Error('psst_pending_invalid'); }
@@ -106,10 +110,10 @@ function writePending(directory, value) {
   renameSync(temp, join(directory, 'pending.json'));
   const dir = openSync(directory, constants.O_RDONLY); try { fsyncSync(dir); } finally { closeSync(dir); }
 }
-export function savePending({ directory = installationDirectory(), brokerUrl, expectedRevision, requestId = null }) {
+export function savePending({ directory = installationDirectory(), brokerUrl, expectedRevision, requestId = null, previousRequestId, owner }) {
   return withSelectionLock(directory, () => {
     readPendingFile(directory); // Explicit setup is not permission to reset corrupt state.
-    const value = { format: 'psst-opencode-pending-v1', flowId: randomUUID(), brokerUrl, expectedRevision, requestId, paused: false };
+    const value = { format: 'psst-opencode-pending-v1', flowId: randomUUID(), brokerUrl, expectedRevision, requestId, paused: false, ...(owner ? { owner } : {}), ...(previousRequestId ? { previousRequestId } : {}) };
     writePending(directory, value); return value;
   });
 }
