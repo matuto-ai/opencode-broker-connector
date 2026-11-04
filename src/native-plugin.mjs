@@ -42,7 +42,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   const registryPrefix = 'psst-v2-session:' + createHash('sha256').update(canonical({ directory, workspaceID: ctx.location.workspaceID ?? null })).digest('hex') + ':';
   if (!validID(hostID)) throw new Error('psst_host_binding_unavailable');
   const sessions = new Map(), preparing = new Map(), blocked = new Set(), authorizationBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
-  let disposed = false, events, setup, presenceTimer, synchronizing;
+  let disposed = false, closing, events, setup, presenceTimer, synchronizing;
   const presence = presenceFactory({ directory: presenceDirectory(setupOptions.directory ?? installationDirectory(), ctx.location, { create: true }) });
   const selected = sessionID => { try { return presence.selected().has(sessionID); } catch { return false; } };
   const diagnostic = code => { try { onDiagnostic({ code }); } catch {} };
@@ -176,15 +176,20 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     return candidate;
   }
   const catalog = nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive');
-  async function dispose() {
-    if (disposed) return;
+  function dispose() {
+    if (closing) return closing;
+    // Every caller joins the same drain, including shutdown triggered by the
+    // event subscription. Do not release an owner while its calls still run.
+    closing = Promise.resolve().then(async () => {
+      await setup?.stop();
+      await toolScope.close();
+      await Promise.all([...sessions, ...preparing].map(([id, state]) => close(id, state)));
+      await Promise.all(registrations.map(item => item.dispose()));
+      await events?.catch(() => {});
+    });
     disposed = true; clearInterval(presenceTimer); controller.abort();
     for (const state of [...sessions.values(), ...preparing.values()]) state.controller.abort();
-    await setup?.stop();
-    await toolScope.close();
-    await Promise.all([...sessions, ...preparing].map(([id, state]) => close(id, state)));
-    await Promise.all(registrations.map(item => item.dispose()));
-    await events?.catch(() => {});
+    return closing;
   }
   const status = sessionID => {
     const state = sessions.get(sessionID);
@@ -192,7 +197,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
     return { connector_version: packageInfo.version, host_version: HOST_VERSION, mode: 'native_automatic',
-      connected: !!state?.delivery && selected(sessionID) && authorization === 'active',
+      connected: !disposed && !state?.controller.signal.aborted && !!state?.delivery && selected(sessionID) && authorization === 'active',
       availability: selected(sessionID) ? 'selected' : 'inactive', authorization_state: authorization,
       client_id: state?.client?.inbox?.identity?.client_id ?? null,
       last_delivery_status: state?.deliveryStatus ?? null, receipt_semantics: 'durable_native_admission_not_model_read' };
@@ -291,7 +296,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         }
         if (event.type === 'session.created') void connect(sessionID).catch(() => diagnostic('native_connection_unavailable'));
       }
-    })().catch(() => { if (!disposed) { diagnostic('native_event_stream_unavailable'); void dispose(); } });
+      // A clean EOF is still loss of cancellation/lifecycle observation. Polling
+      // native state cannot replace the missed in-flight event boundaries.
+      if (!disposed) throw new Error('native_event_stream_unavailable');
+    })().catch(() => { if (!disposed) { diagnostic('native_event_stream_unavailable'); void dispose().catch(() => diagnostic('native_shutdown_incomplete')); } });
     // Selection never creates a binding. It only restores an already persisted,
     // independently checked native identity. New sessions connect through their
     // verified native prompt/tool/setup context, not through a lease file.
@@ -319,6 +327,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       try { await synchronizing; } finally { synchronizing = undefined; }
     };
     await synchronize();
+    if (disposed) { await dispose(); throw new Error('native_event_stream_unavailable'); }
     presenceTimer = setInterval(() => void synchronize(), 500); presenceTimer.unref?.();
     void setup?.resume().catch(() => diagnostic('native_setup_restore_unavailable'));
     return { dispose, connect, status, activate };

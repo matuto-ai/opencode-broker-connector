@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { tool } from '../src/tool-schema.mjs';
 import { setupNativePlugin } from '../src/native-plugin.mjs';
 import { openNativeInbox } from '../src/native-inbox.mjs';
+import { createNativeDelivery } from '../src/native-delivery.mjs';
+import { randomUUID } from 'node:crypto';
 import { loadBrokerReference } from '../src/reference.mjs';
 const reference=await loadBrokerReference();
 async function fixture(t) {
@@ -219,4 +221,101 @@ test('uncertain replacement blocks reconnect in the same plugin instead of alloc
   await assert.rejects(runtime.connect('one'), /native_plugin_closed/);
   assert.equal(allocations, 1);
   assert.equal(runtime.status('one').connected, false);
+});
+
+test('clean event-stream end fences active sessions and drains the same shutdown before reload', async t => {
+  const f = await fixture(t);
+  await f.runtime.dispose();
+  let endStream, enteredStop, finishStop;
+  const streamEnded = new Promise(resolve => { endStream = resolve; });
+  const stopping = new Promise(resolve => { enteredStop = resolve; });
+  const drained = new Promise(resolve => { finishStop = resolve; });
+  const diagnostics = [];
+  f.ctx.event.subscribe = async function* () { await streamEnded; };
+  const runtime = await setupNativePlugin({ ...f.options,
+    onDiagnostic: entry => diagnostics.push(entry.code),
+    deliveryFactory: () => ({ start() {}, event() {}, async stop() { enteredStop(); await drained; } }),
+  });
+  t.after(() => { endStream(); finishStop(); return runtime.dispose(); });
+  await runtime.connect('one');
+  const identity = runtime.status('one').client_id;
+  endStream();
+  await Promise.race([stopping, new Promise(resolve => setTimeout(resolve, 50))]);
+  assert.ok(diagnostics.includes('native_event_stream_unavailable'));
+  assert.equal(await f.states.at(-1).currentBinding(), null);
+  assert.equal(runtime.status('one').connected, false);
+  await assert.rejects(runtime.connect('two'), /native_plugin_closed/);
+  let closed = false;
+  const closing = runtime.dispose().then(() => { closed = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(closed, false, 'dispose must join the in-progress event-stream shutdown');
+  finishStop();
+  await closing;
+  assert.equal(f.tools.size, 0);
+  assert.equal(f.hooks.size, 0);
+  f.ctx.event.subscribe = async function* ({ signal }) {
+    if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  };
+  const reloaded = await setupNativePlugin(f.options);
+  t.after(() => reloaded.dispose());
+  await reloaded.connect('one');
+  assert.equal(reloaded.status('one').client_id, identity, 'stream loss never replaces the durable identity');
+});
+
+test('event stream ending during setup cannot return an apparently usable plugin', async t => {
+  const f = await fixture(t);
+  await f.runtime.dispose();
+  f.ctx.event.subscribe = async function* () {};
+  await assert.rejects(setupNativePlugin(f.options), /native_event_stream_unavailable/);
+  assert.equal(f.tools.size, 0);
+  assert.equal(f.hooks.size, 0);
+});
+
+test('event-stream loss aborts in-flight native admission and preserves uncertainty across reload', async t => {
+  const f = await fixture(t);
+  await f.runtime.dispose();
+  let endStream, entered, lateReceipt, delivery, calls = 0;
+  const ending = new Promise(resolve => { endStream = resolve; });
+  const submitted = new Promise(resolve => { entered = resolve; });
+  f.ctx.event.subscribe = async function* () { await ending; };
+  f.ctx.session.synthetic = async input => {
+    calls++;
+    entered();
+    await new Promise(resolve => { lateReceipt = resolve; });
+    return { id: input.id, sessionID: input.sessionID, type: 'synthetic', delivery: 'queue',
+      payload: { text: input.text, description: input.description, metadata: input.metadata } };
+  };
+  const options = { ...f.options, deliveryFactory: args => {
+    delivery = createNativeDelivery(args);
+    return { ...delivery, start() {} };
+  } };
+  const runtime = await setupNativePlugin(options);
+  t.after(() => { endStream(); lateReceipt?.(); return runtime.dispose(); });
+  await runtime.connect('one');
+  const inbox = f.states.at(-1).client.inbox, identity = inbox.identity, now = Date.now();
+  const envelope = { protocol_version: '1', message_id: randomUUID(), recipient_id: identity.client_id, recipient_sequence: 1,
+    sender: { client_id: randomUUID(), client_type: 'pi', name: 'peer', model: { provider: null, id: null, source: 'unknown' }, project: null, metadata_revision: 1 },
+    origin: 'broker_agent', authority: 'untrusted_agent_input', content: { type: 'text/plain', text: 'Retain this pending message.' },
+    accepted_at: new Date(now).toISOString(), expires_at: new Date(now + 86400000).toISOString(), correlation_id: null, reply_to_message_id: null };
+  inbox.accept(envelope);
+  const ticking = delivery.tick();
+  await submitted;
+  endStream();
+  await new Promise(resolve => setImmediate(resolve));
+  await runtime.dispose();
+  await ticking;
+  lateReceipt();
+  f.ctx.event.subscribe = async function* ({ signal }) {
+    if (!signal.aborted) await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+  };
+  const reloaded = await setupNativePlugin(options);
+  t.after(() => reloaded.dispose());
+  await reloaded.connect('one');
+  const recovered = f.states.at(-1).client.inbox;
+  assert.deepEqual(recovered.identity, identity);
+  assert.equal(recovered.head().message_id, envelope.message_id);
+  assert.equal(recovered.head().state, 'uncertain');
+  await delivery.tick();
+  assert.equal(calls, 1, 'lost event observation or a late receipt cannot authorize a mutation retry');
+  assert.equal(recovered.head().state, 'uncertain');
 });
