@@ -137,14 +137,22 @@ test('approved candidate is not presented as connected before native status prov
   await f.run('psst-status'); assert.doesNotMatch(f.toasts.at(-1).message, /is connected/); assert.match(f.toasts.at(-1).message, /authorization approved/);
 });
 
-test('two independent TUI views on the same project keep stable setup and status isolated', async t => {
-  const first = fixture(t);
+for (const phase of ['prompt', 'rpc']) test(`two independent TUI views stay isolated during an active ${phase}`, async t => {
+  let release;
+  const gate = () => new Promise(resolve => { release = resolve; });
+  const first = fixture(t, phase === 'prompt' ? { prompt: gate } : { result: { setup: gate } });
   const second = fixture(t, { sharedRoot: first.ctx.location.directory, sessionID: 'ses_two' });
+  const action = first.run('psst-setup');
+  while (!release) await new Promise(resolve => setImmediate(resolve));
   second.route({ type: 'session', sessionID: 'ses_three' });
   second.renderer.emit('blur');
-  await first.run('psst-setup'); await second.run('psst-status');
+  await second.run('psst-status');
+  for (const call of first.calls) assert.equal(call.options.signal.aborted, false);
+  release(phase === 'prompt' ? 'https://broker.example.com' : { state: 'pending', request_id: 'first-request', request_outcome: 'saved' });
+  await action;
   assert.deepEqual(first.calls.map(c => c.input.sessionID), ['ses_one', 'ses_one']);
   assert.deepEqual(second.calls.map(c => c.input.sessionID), ['ses_three']);
+  for (const call of first.calls) assert.equal(call.options.signal.aborted, false);
   assert.doesNotMatch(first.toasts.at(-1).message, /suspended/);
 });
 
