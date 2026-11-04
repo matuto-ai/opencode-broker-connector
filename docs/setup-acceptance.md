@@ -88,5 +88,9 @@ current CI checks or proof of the current environment.
 
 Unit success does not establish authenticated provider execution, active model
 toolchain/abort behavior, release availability or native-host compatibility.
-Issue #8 tracks the separate product acceptance work. This test cleanup does not
-publish a package, provision credentials, deploy, or close that issue.
+For issue #8, the owner explicitly accepted source implementation, focused unit
+tests, independent review and CI as the current acceptance scope on 2026-11-04.
+Real-environment and integrated native/provider/container tests are deferred to a
+later run on the owner's machine, not current acceptance gates. Package
+publication is handled separately by the owner. These changes do not provision
+credentials or deploy anything.
