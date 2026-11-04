@@ -14,6 +14,7 @@ import { createPresenceReader, presenceDirectory } from '../src/active-presence.
 import { loadBrokerReference } from '../src/reference.mjs';
 
 import { stopHostProcess } from './host-process.mjs';
+import { createContainerLauncher } from './host-container.mjs';
 
 for (const approval of [false, true]) test(approval ? 'official OpenCode native setup survives cancel, denial, replacement and restart with real TLS approval' : 'official OpenCode reopens exact native session and unread mailbox without changing selection',
  {skip:!process.env.OPENCODE_BINARY || approval && !process.env.PSST_APPROVAL_BROKER_DIR,timeout:90000},async t=>{
@@ -21,7 +22,7 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  // Run every cleanup even after an assertion or another cleanup fails.
  const cleanups=[],fixtureContext={after:fn=>cleanups.push(fn)};
  t.after(async()=>{const errors=[];for(const cleanup of cleanups.reverse())try{await cleanup();}catch(error){errors.push(error);}if(errors.length)throw new AggregateError(errors,'native_host_cleanup_failed');});
- const dir=mkdtempSync(join(tmpdir(),'psst-native-host-'));fixtureContext.after(()=>rmSync(dir,{recursive:true,force:true}));
+ let containers;const dir=mkdtempSync(join(tmpdir(),'psst-native-host-'));fixtureContext.after(()=>{if(!containers?.retainEvidence())rmSync(dir,{recursive:true,force:true});});
  const packed=spawnSync('npm',['pack','--json','--ignore-scripts','--pack-destination',dir,'--cache',join(dir,'npm-cache')],{encoding:'utf8',cwd:fileURLToPath(new URL('../',import.meta.url))});assert.equal(packed.status,0,packed.stderr);
  const tar=spawnSync('tar',['-xzf',join(dir,JSON.parse(packed.stdout)[0].filename),'-C',dir],{encoding:'utf8'});assert.equal(tar.status,0,tar.stderr);
  symlinkSync(fileURLToPath(new URL('../node_modules',import.meta.url)),join(dir,'package','node_modules'));
@@ -41,11 +42,13 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  writeFileSync(join(driver,'tui.js'),`import {readFileSync,writeFileSync} from 'node:fs';import {SETUP_RPC} from ${JSON.stringify(pathToFileURL(join(dir,'package','src','setup-rpc.mjs')).href)};export default {id:'fixture.driver',setup:ctx=>{let previous,rpcPrevious,capabilitiesPrevious;const timer=setInterval(()=>{const capabilities=JSON.stringify({layer:typeof ctx.keymap?.layer,prompt:typeof ctx.ui?.dialog?.prompt,confirm:typeof ctx.ui?.dialog?.confirm,commands:ctx.keymap?.commands?.().filter(c=>c.id?.startsWith('psst')).map(c=>({id:c.id,slash:c.slash})),mode:ctx.keymap?.mode?.current?.()});if(capabilities!==capabilitiesPrevious){capabilitiesPrevious=capabilities;writeFileSync(${JSON.stringify(join(dir,'tui-capabilities.json'))},capabilities);}try{const raw=readFileSync(${JSON.stringify(routeFile)},'utf8');if(raw!==previous){previous=raw;ctx.ui.router.navigate(JSON.parse(raw));}}catch{}try{const raw=readFileSync(${JSON.stringify(rpcFile)},'utf8');if(raw!==rpcPrevious){rpcPrevious=raw;const request=JSON.parse(raw);Promise.resolve().then(()=>ctx.client.rpc(SETUP_RPC)[request.method](request.input,{location:ctx.location,signal:AbortSignal.timeout(10000)})).then(result=>writeFileSync(${JSON.stringify(rpcResultFile)},JSON.stringify({id:request.id,result})),error=>writeFileSync(${JSON.stringify(rpcResultFile)},JSON.stringify({id:request.id,error:JSON.stringify(error,Object.getOwnPropertyNames(error))})));}}catch{}},50);return()=>clearInterval(timer);}}`);
  writeFileSync(join(driver,'index.js'),`import {writeFileSync} from 'node:fs';export default {id:'fixture.driver',setup:async ctx=>{await ctx.command.transform(e=>{for(const [name,id] of [['fixture-setup','broker_setup'],['fixture-connect','broker_list_clients']])e.add({name,execute:async({sessionID})=>{const tools=await ctx.tool.list();const tool=tools.find(t=>t.id===id);if(!tool)throw Error('missing native tool');const result=await tool.execute(id==='broker_setup'?{broker_url:${JSON.stringify(url)}}:{},{sessionID,messageID:'msg_fixture',id:'call_fixture',signal:new AbortController().signal,progress:async()=>{}});if(id==='broker_setup')writeFileSync(${JSON.stringify(resultFile)},result.content);}});});}}`);
  writeFileSync(join(project,'opencode.json'),JSON.stringify({permissions:[{action:'fixture_sensitive_action',resource:'*',effect:'ask'}],plugins:[{package:join(dir,'package'),...(approval?{}:{options:{connectionFile:configPath}})}]}));
+ containers=process.env.PSST_OPENCODE_DOCKER==='1' ? createContainerLauncher({directory:dir,project,binary:process.env.OPENCODE_BINARY,modules:fileURLToPath(new URL('../node_modules',import.meta.url))}) : null;
+ if(containers)fixtureContext.after(()=>containers.cleanup());
  const password=randomBytes(32).toString('base64url');
  const port=await new Promise((resolve,reject)=>{const s=createServer();s.once('error',reject);s.listen(0,'127.0.0.1',()=>{const port=s.address().port;s.close(()=>resolve(port));});});
  const hostEnv={PATH:process.env.PATH,HOME:join(dir,'home'),XDG_CONFIG_HOME:join(dir,'config'),XDG_DATA_HOME:join(dir,'data'),XDG_CACHE_HOME:join(dir,'cache'),XDG_STATE_HOME:join(dir,'xdg-state'),OPENCODE_SERVER_PASSWORD:password,PSST_OPENCODE_CONFIG_DIR:join(dir,'installation'),NODE_EXTRA_CA_CERTS:cert};
  let child,output='';
- function startServer(){child=spawn(process.env.OPENCODE_BINARY,['--log-level','debug','--print-logs','serve','--hostname','127.0.0.1','--port',String(port)],{cwd:project,env:hostEnv,stdio:['ignore','pipe','pipe']});child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);const owned=child;fixtureContext.after(()=>stopHostProcess(owned));}
+ function startServer(){const args=['--log-level','debug','--print-logs','serve','--hostname','127.0.0.1','--port',String(port)];const executable=containers?.prepare(args,hostEnv) ?? process.env.OPENCODE_BINARY;child=spawn(executable,args,{cwd:project,env:hostEnv,stdio:['ignore','pipe','pipe']});child.stdout.on('data',x=>output+=x);child.stderr.on('data',x=>output+=x);const owned=child;fixtureContext.after(()=>stopHostProcess(owned));}
  startServer();
  const base=`http://127.0.0.1:${port}`;
  async function api(path,body,method=body?'POST':'GET'){const r=await fetch(base+path,{method,headers:{'content-type':'application/json',authorization:'Basic '+Buffer.from('opencode:'+password).toString('base64')},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(5000)});assert.ok(r.ok,`${path}: ${r.status} ${await r.clone().text()}`);return r.status===204?null:r.json();}
@@ -57,14 +60,15 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  const quote=s=>"'"+s.replaceAll("'", "'\\''")+"'";
  const tuiPidFile=join(dir,'tui.pid');
  let tui,tuiOutput='',stopTui;
- function startTui(){ let stopped=false; tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(process.env.OPENCODE_BINARY)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:hostEnv,detached:true,stdio:['pipe','pipe','pipe']});
+ function startTui(){ let stopped=false;const executable=containers?.prepare(['--server',base,'--session',session.id,project],hostEnv) ?? process.env.OPENCODE_BINARY; tui=spawn('script',['-q','-f','-c',`stty rows 40 cols 120; echo $$ > ${quote(tuiPidFile)}; exec ${quote(executable)} --server ${quote(base)} --session ${quote(session.id)} ${quote(project)}`,'/dev/null'],{cwd:project,env:hostEnv,detached:true,stdio:['pipe','pipe','pipe']});
 tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});const owned=tui;stopTui=async()=>{
   if(stopped)return;stopped=true;
   // Give util-linux script its own two-second child-session shutdown window.
   await stopHostProcess(owned,true,3000);
   const pid=Number(readFileSync(tuiPidFile,'utf8').trim());assert.ok(Number.isInteger(pid)&&pid>0);
   // util-linux script owns another session for the shell/TUI. Verify that the
-  // actual native process also exited, not only the PTY recorder's leader.
+  // native process (or Docker launcher) also exited, not just the PTY recorder.
+  // Container mode independently verifies removal of the actual native host.
   const alive=()=>{try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8');return !['Z','X'].includes(stat.slice(stat.lastIndexOf(')')+2).split(' ')[0]);}catch(error){if(error.code==='ENOENT')return false;throw error;}};
   for(let i=0;i<100&&alive();i++)await delay(10);
   assert.equal(alive(),false,'actual native TUI must stop with its PTY recorder');
@@ -106,7 +110,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
    // Server may restart before the owner TUI reconnects. Restoring selection
    // must resume this exact pending approval with GET only, not require setup.
    const beforePendingRestart=authority.approval.list().length;
-   await stopTui();await stopHostProcess(child);rmSync(rpcFile,{force:true});
+   await stopTui();await stopHostProcess(child);containers?.assertRemoved();rmSync(rpcFile,{force:true});
    startServer();await waitServer();
    await authority.decide(replacement.request_id);approvedEnrollmentID=replacement.request_id;
    await delay(700);assert.equal((await peer.listClients({})).clients.filter(c=>c.client_type==='opencode').length,0,'unselected pending owner cannot activate');
@@ -148,7 +152,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  const originalBinding=bindings().find(b=>b.identity.client_id===originalIdentity);assert.ok(originalBinding);
  assert.equal(typeof originalBinding.identity.session_instance_id,'string');
  const enrollmentBefore=enrollmentID;
- await stopTui();await stopHostProcess(child);
+ await stopTui();await stopHostProcess(child);containers?.assertRemoved();
  rmSync(routeFile,{force:true});rmSync(rpcFile,{force:true});
  // Cached plugin bundles are rebuildable, not a native-history backup.
  rmSync(join(dir,'cache'),{recursive:true,force:true});

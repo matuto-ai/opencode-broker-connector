@@ -53,8 +53,9 @@ approval comes from the real disposable form-login UI, never from peer content.
 The selected provider deliberately does not exist. These are **real native
 admission, routing, restart and failure tests, not authenticated model-response
 acceptance**. They do not qualify an active authenticated model toolchain or
-in-flight model abort. The separate Docker gate uses a synthetic native API, so
-it is not evidence of OpenCode itself running inside a recreated container.
+in-flight model abort. The separate 30-session Docker gate uses a synthetic native API. The actual-host
+container gate below instead runs this official CLI/TUI scenario inside removed
+and recreated containers; neither gate proves authenticated model execution.
 See [the complete evidence boundary](setup-acceptance.md).
 
 ## Local reproduction
@@ -74,3 +75,37 @@ The default `npm test` retains optional host probes for developers without the C
 CI's dedicated host stage cannot silently pass with either prerequisite absent.
 The published-package installer probe remains a separate opt-in gate requiring
 `PSST_OPENCODE_PACKAGE_SPEC`; this job does not claim that release proof.
+
+### Actual-host container persistence gate
+
+The same `current-host.test.mjs` scenarios run a second time with
+`PSST_OPENCODE_DOCKER=1`. This launches the checksum-verified official binary,
+not the synthetic host fixture, in a fresh container for every server and TUI
+invocation. The TUI receives its own container PTY. Both containers are removed
+before reopening, and Docker container IDs must change. The runner records owned
+names before creation, confirms creation in the supervising test process before
+starting any killable attach wrapper, checks removal at restart, and force-cleans
+owned leftovers on failure. A leftover at normal teardown fails the test even after cleanup.
+
+Only the disposable fixture tree is a writable bind mount; `/tmp` is ephemeral.
+The verified
+binary, runtime dependencies, and broker public CA are read-only mounts. No user
+home, checkout, Docker socket, or runner token is mounted. Host networking is used
+only so the official server/TUI can reach the ephemeral loopback TLS broker and
+host API; processes run with the runner's UID/GID, dropped capabilities, and
+`no-new-privileges`.
+
+Persistence retains the same test HOME, XDG config/data/state, private connector
+installation, absolute project path and UID. XDG cache is deleted before reopening.
+The gate checks the same exact native session, broker identity, unread admission,
+setup ownership, keyboard dialog, denial/replacement, and revocation scenarios as
+the process gate. It does not qualify an authenticated provider response or a
+running model/toolchain. The separate synthetic Docker fixture remains distinct.
+
+A failed or timed-out create is reconciled only after a positively observed owned
+container can be removed. If the bounded reconciliation cannot establish its
+outcome, the gate fails and retains the fixture plus a private ownership receipt
+outside it. The failure names both retained paths without printing credentials;
+an absent inspect result is never treated as proof that a late create is impossible.
+Executable fake-Docker tests cover that failure layer cheaply, but are not real
+Docker acceptance. Local environments without Docker cannot qualify this gate.

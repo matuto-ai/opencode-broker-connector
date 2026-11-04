@@ -95,7 +95,13 @@ Required CI combines independent layers; they are not interchangeable:
 - The official OpenCode server and actual TUI use real verified TLS admin approval.
   They exercise restart, unread admission, independent session addresses, native
   RPC cancellation/replacement, queued human input, permission preservation and
-  failed-execution behavior. See [official-host CI](official-host-ci.md).
+  failed-execution behavior. A second required pass runs these same official-host
+  scenarios in newly created server and TUI Docker containers, confirms their
+  distinct IDs and complete removal before reopening, and retains the documented
+  private/native roots with the same UID. This actual-host gate is separate from
+  the synthetic 30-session gate above. Fake-Docker cleanup tests are only local
+  preflight; actual container execution requires Docker CI. See
+  [official-host CI](official-host-ci.md).
 
 The exact scoped package is not yet published, so the published-package installer
 probe remains opt-in. Publishing or changing account credentials is not part of

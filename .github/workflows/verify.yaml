@@ -81,6 +81,15 @@ jobs:
         env:
           OPENCODE_BINARY: ${{ runner.temp }}/opencode-host/opencode
           PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-fixtures/psst-approval
+      - name: Pull pinned real-host container runtime
+        run: docker pull node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df
+      - name: Verify official host across removed and recreated containers
+        run: node scripts/test.mjs host
+        env:
+          PSST_OPENCODE_DOCKER: '1'
+          OPENCODE_BINARY: ${{ runner.temp }}/opencode-host/opencode
+          PSST_APPROVAL_BROKER_DIR: ${{ github.workspace }}/.test-fixtures/psst-approval
+
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 1
