@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, lstatSync } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { readFileSync, readdirSync, lstatSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+import { join, isAbsolute, basename } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -58,4 +58,17 @@ export function verifyPackageArtifact({ source, installed, artifact, archive, ru
     source_dirty: git(['status', '--porcelain', '--untracked-files=all']) !== '',
     archive_sha256: archive ? sha256(readFileSync(archive)) : null,
     files_sha256: files, evidence: 'installed-package component check; not authenticated native-host or production acceptance' };
+}
+
+// Called only after the real installed-artifact assertions have all passed.
+// Releases transport these exact bytes instead of silently packing a second copy.
+export function preserveVerifiedArtifact({ archive, evidence, destination }) {
+  if (!destination) return;
+  assert.equal(sha256(readFileSync(archive)), evidence.archive_sha256, 'tested archive changed before preservation');
+  const filename = basename(archive);
+  assert.match(filename, /^[A-Za-z0-9_.-]+\.tgz$/, 'invalid release archive name');
+  mkdirSync(destination, { recursive: true });
+  copyFileSync(archive, join(destination, filename));
+  writeFileSync(join(destination, 'SHA256SUMS'), `${evidence.archive_sha256}  ${filename}\n`);
+  writeFileSync(join(destination, 'provenance.json'), JSON.stringify(evidence, null, 2) + '\n');
 }

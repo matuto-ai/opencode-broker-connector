@@ -21,6 +21,8 @@ component evidence, not real-host/model acceptance.
 Negative regressions cover stale version, stale source bytes with an unchanged
 version, an omitted runtime module, mismatched running version, wrong source
 commit and dirty fixture. No manual release/version edit is required to assemble
-these tests. The official host binaries remain explicit compatibility targets;
+these tests. Release verification retains the exact successful tarball and its
+SHA-256 receipt; publication uses those bytes with lifecycle scripts disabled,
+not a second package build. The official host binaries remain explicit compatibility targets;
 this gate does not silently upgrade host runtimes or mutate production.
 

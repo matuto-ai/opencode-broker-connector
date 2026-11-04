@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { verifyPackageArtifact, assertRuntimeVersion } from '../scripts/package-provenance.mjs';
+import { verifyPackageArtifact, assertRuntimeVersion, preserveVerifiedArtifact } from '../scripts/package-provenance.mjs';
 
 function fixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'psst-package-drift-'));
@@ -46,4 +47,15 @@ test('CI package guard binds packaged bytes to the exact selected commit', t => 
   assert.throws(() => verifyPackageArtifact({ ...f, expectedCommit: '0'.repeat(40) }), /different CI checkout/);
   for (const root of [f.source, f.installed]) writeFileSync(join(root, 'src/runtime.mjs'), 'export const active = false;');
   assert.throws(() => verifyPackageArtifact({ ...f, expectedCommit }), /changed after checkout/);
+});
+
+test('release preserves only the exact tested tarball and rejects changed bytes', t => {
+  const f = fixture(t), archive = join(f.source, 'verified.tgz'), destination = join(f.source, 'release');
+  writeFileSync(archive, 'synthetic archive bytes');
+  const evidence = { archive_sha256: createHash('sha256').update(readFileSync(archive)).digest('hex') };
+  preserveVerifiedArtifact({ archive, evidence, destination });
+  assert.deepEqual(readFileSync(join(destination, 'verified.tgz')), readFileSync(archive));
+  assert.equal(readFileSync(join(destination, 'SHA256SUMS'), 'utf8'), evidence.archive_sha256 + '  verified.tgz\n');
+  writeFileSync(archive, 'changed after test');
+  assert.throws(() => preserveVerifiedArtifact({ archive, evidence, destination }), /changed before preservation/);
 });

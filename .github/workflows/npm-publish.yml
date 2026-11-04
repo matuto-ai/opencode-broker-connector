@@ -24,5 +24,11 @@ jobs:
       - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
       - run: npm run check
       - run: npm test
+        env:
+          PSST_VERIFIED_PACKAGE_OUTPUT_DIR: ${{ runner.temp }}/verified-package
       - run: npm run pack:check
-      - run: npm publish --access public --provenance
+      - name: Publish the verified tarball without rebuilding
+        working-directory: ${{ runner.temp }}/verified-package
+        run: |
+          sha256sum --check --strict SHA256SUMS
+          npm publish ./*.tgz --ignore-scripts --access public --provenance

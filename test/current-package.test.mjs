@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { Host } from '@opencode/plugin/host';
-import { verifyPackageArtifact, assertRuntimeVersion } from '../scripts/package-provenance.mjs';
+import { verifyPackageArtifact, assertRuntimeVersion, preserveVerifiedArtifact } from '../scripts/package-provenance.mjs';
 const root=fileURLToPath(new URL('../',import.meta.url));
 
 test('root npm manifest has one current native server and registry-only production dependency',()=>{
@@ -37,6 +37,7 @@ test('actual root tarball installs without Git and the official loader selects o
  const {loadBrokerReference}=await import(new URL('../src/reference.mjs',import.meta.url));await loadBrokerReference(join(directory,'vendor','broker'));
  assert.deepEqual(readdirSync(join(consumer,'node_modules')).filter(x=>!x.startsWith('.')).sort(),['@matuto-ai','zod']);
  assert.equal(existsSync(join(directory,'plugin','tui.mjs')),true);assert.equal(existsSync(join(directory,'v2')),false);
+ preserveVerifiedArtifact({archive:join(dir,artifact.filename),evidence:{...evidence,runtime_version:runtimeVersion},destination:process.env.PSST_VERIFIED_PACKAGE_OUTPUT_DIR});
 });
 
 // Official loader coverage above is distinct from this isolated host-API fixture.
