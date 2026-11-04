@@ -46,6 +46,7 @@ const stateMessages = {
   paused: 'Local setup is paused. Existing authorization and local data are retained.',
   setup_blocked: 'Setup could not continue. Check /psst-status before retrying.',
   setup_owner_recovery_required: 'Setup ownership needs recovery. Existing authorization and local data are retained.',
+  setup_owned_elsewhere: 'Setup belongs to another chat. Return to that chat and use /psst-status; do not close other chats or reset setup.',
 };
 function brokerOrigin(value) {
   if (typeof value !== 'string' || value.length > 2048 || /[\s\x00-\x1f\x7f-\x9f]/u.test(value)) throw Error('invalid_url');
@@ -70,6 +71,8 @@ function statusMessage(result) {
     } catch {}
   }
   if (typeof result?.request_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(result.request_id)) message += ` Request: ${result.request_id}.`;
+  if (result?.request_outcome === 'unknown') message += ' The request outcome is unknown. Check /psst-status in the original chat before retrying; the saved request must be reconciled.';
+  else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
   return message;
 }
 function registerSetupUI(ctx, available) {
@@ -89,17 +92,21 @@ function registerSetupUI(ctx, available) {
     if (active) { toast('Finish or dismiss the current Psst dialog first.', 'warning'); return; }
     const controller = new AbortController();
     active = controller;
-    let timer, check, blur;
+    let timer, check, blur, phase = 'selection', reason, submitted = false, received;
+    const abort = cause => { reason ??= cause; controller.abort(); };
     try {
       const selected = selection();
       if (!available()) throw Error('local_unavailable');
       const location = { ...ctx.location };
       check = () => {
         try { const current = selection();
-          if (JSON.stringify(current) !== JSON.stringify(selected)) controller.abort();
-        } catch { controller.abort(); }
+          if (current.sessionID !== selected.sessionID) abort('session_changed');
+          else if (current.directory !== selected.directory || current.workspaceID !== selected.workspaceID) abort('location_changed');
+        } catch { abort('selection_unavailable'); }
       };
-      blur = () => controller.abort();
+      // A blur cannot prove where native confirmation input will go. Suspend
+      // this action, not other TUIs or the persisted enrollment request.
+      blur = () => abort('terminal_blur');
       ctx.renderer?.on?.('blur', blur);
       ctx.renderer?.on?.('frame', check);
       timer = setInterval(check, 50); timer.unref?.();
@@ -116,18 +123,24 @@ function registerSetupUI(ctx, available) {
       const rpc = ctx.client.rpc(SETUP_RPC);
       const call = async (method, input) => {
         verify();
+        phase = method === 'status' && kind === 'setup' ? 'preflight' : method;
+        if (method === 'setup') { submitted = true; received = undefined; }
         const result = await rpc[method]({ sessionID: selected.sessionID, ...input }, { location, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(15000)]) });
+        received = result;
         verify(); return result;
       };
       if (kind === 'setup') {
+        phase = 'url_prompt';
         const value = await ctx.ui.dialog.prompt({ title: 'Set up Psst', description: 'Enter only your HTTPS broker URL. Approval happens in the broker admin UI; never paste a token or credential.', placeholder: 'https://broker.example.com' });
         if (value === undefined) return;
         verify();
         const broker_url = brokerOrigin(value);
         const status = await call('status', { broker_url });
+        if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(status?.state)) { toast(statusMessage(status), 'warning'); return; }
         let replacement_confirmed = false;
         if (status?.replacement_confirmation_required === true) {
           if (typeof status.request_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(status.request_id)) throw Error('invalid_status');
+          phase = 'replacement_confirmation';
           replacement_confirmed = await ctx.ui.dialog.confirm({ title: 'Replace Psst authorization?', message: 'This creates a new approval request and, after approval, new credential-bound addresses. Old addresses will not become the new identity. Old local data is retained. Continue?', label: { confirm: 'Create new request', cancel: 'Keep existing' } }) === true;
           verify();
           if (!replacement_confirmed) return;
@@ -136,13 +149,19 @@ function registerSetupUI(ctx, available) {
         toast(statusMessage(result));
       } else toast(statusMessage(await call(kind, {})));
     } catch (error) {
-      const message = error?.message === 'invalid_url'
+      let message = error?.message === 'invalid_url'
         ? 'Enter an HTTPS broker origin only, without credentials, path, query or fragment.'
         : controller.signal.aborted || error?.message === 'selection_changed'
-          ? 'Psst action stopped because the selected chat or terminal focus changed. Run it again in the intended chat.'
+          ? 'Psst action suspended. Return focus to the original chat, dismiss the old dialog, then use /psst-status. Reopen /psst-setup there if needed; confirmations must be given again. Other chats can stay open.'
           : error?.message === 'local_unavailable'
             ? 'Setup requires a local TUI sharing the server private directory.'
             : 'Psst action could not complete. Check /psst-status before retrying; do not paste credentials.';
+      const outcome = submitted ? received?.request_outcome !== 'unknown' && (received?.request_outcome === 'saved' || phase === 'setup' && received?.request_id) ? 'saved' : 'unknown' : 'not_submitted';
+      message += outcome === 'not_submitted' ? ' This action did not submit a setup request.'
+        : outcome === 'saved' ? ' The exact request was saved; check its status rather than creating another.'
+          : ' Setup may already have saved a request; its outcome is unknown. Retry only in the original chat to reconcile it.';
+      // Fixed enums only: no native IDs, private paths, dialog input or errors.
+      message += ` [phase=${phase}; cause=${reason ?? (controller.signal.aborted ? 'cancelled' : 'operation_failed')}; request=${outcome}]`;
       toast(message, 'warning');
     } finally {
       clearInterval(timer);

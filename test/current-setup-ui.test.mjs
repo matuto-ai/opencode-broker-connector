@@ -8,12 +8,12 @@ import tui from '../plugin/tui.mjs';
 import { SETUP_RPC } from '../src/setup-rpc.mjs';
 import { presenceDirectory } from '../src/active-presence.mjs';
 
-function fixture(t, { prompt = async () => 'https://broker.example.com', confirm = async () => true, result = {} } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'setup-ui-'));
+function fixture(t, { prompt = async () => 'https://broker.example.com', confirm = async () => true, result = {}, sharedRoot, sessionID = 'ses_one' } = {}) {
+  const root = sharedRoot ?? mkdtempSync(join(tmpdir(), 'setup-ui-'));
   presenceDirectory(root, { directory: root }, { create: true });
   const prior = process.env.PSST_OPENCODE_CONFIG_DIR;
   process.env.PSST_OPENCODE_CONFIG_DIR = root;
-  let commands, memory, route = { type: 'session', sessionID: 'ses_one' };
+  let commands, memory, route = { type: 'session', sessionID };
   const calls = [], prompts = [], confirmations = [], toasts = [], renderer = new EventEmitter();
   const ctx = {
     app: { version: '2.2.5' }, location: { directory: root }, renderer,
@@ -31,7 +31,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
     } },
   };
   const stop = tui.setup(ctx);
-  t.after(() => { stop(); if (prior === undefined) delete process.env.PSST_OPENCODE_CONFIG_DIR; else process.env.PSST_OPENCODE_CONFIG_DIR = prior; rmSync(root, { recursive: true, force: true }); });
+  t.after(() => { stop(); if (sharedRoot) return; if (prior === undefined) delete process.env.PSST_OPENCODE_CONFIG_DIR; else process.env.PSST_OPENCODE_CONFIG_DIR = prior; if (!sharedRoot) rmSync(root, { recursive: true, force: true }); });
   return { ctx, commands, calls, prompts, confirmations, toasts, renderer, stop,
     route(value) { route = value; renderer.emit('frame'); }, run: id => commands.find(x => x.id === id).run() };
 }
@@ -135,4 +135,64 @@ for (const state of ['pending', 'denied', 'expired', 'paused']) test(`existing c
 test('approved candidate is not presented as connected before native status proves connection', async t => {
   const f = fixture(t, { result: { status: { connected: false, state: 'approved' } } });
   await f.run('psst-status'); assert.doesNotMatch(f.toasts.at(-1).message, /is connected/); assert.match(f.toasts.at(-1).message, /authorization approved/);
+});
+
+test('two independent TUI views on the same project keep stable setup and status isolated', async t => {
+  const first = fixture(t);
+  const second = fixture(t, { sharedRoot: first.ctx.location.directory, sessionID: 'ses_two' });
+  second.route({ type: 'session', sessionID: 'ses_three' });
+  second.renderer.emit('blur');
+  await first.run('psst-setup'); await second.run('psst-status');
+  assert.deepEqual(first.calls.map(c => c.input.sessionID), ['ses_one', 'ses_one']);
+  assert.deepEqual(second.calls.map(c => c.input.sessionID), ['ses_three']);
+  assert.doesNotMatch(first.toasts.at(-1).message, /suspended/);
+});
+
+for (const stage of ['url_prompt', 'replacement_confirmation', 'setup', 'status', 'cancel']) test(`blur at ${stage} reports bounded phase and preserves context fences`, async t => {
+  let release;
+  const gate = () => new Promise(resolve => { release = resolve; });
+  const f = fixture(t, {
+    prompt: stage === 'url_prompt' ? gate : async () => 'https://broker.example.com',
+    confirm: stage === 'replacement_confirmation' ? gate : async () => true,
+    result: {
+      status: stage === 'status' ? gate : { state: 'denied', request_id: 'old', replacement_confirmation_required: true },
+      setup: stage === 'setup' ? gate : { state: 'pending' }, cancel: gate,
+    },
+  });
+  const action = f.run(stage === 'status' ? 'psst-status' : stage === 'cancel' ? 'psst-cancel-setup' : 'psst-setup');
+  while (!release) await new Promise(resolve => setImmediate(resolve));
+  f.renderer.emit('blur'); f.renderer.emit('focus');
+  release(stage === 'url_prompt' ? 'https://broker.example.com' : stage === 'replacement_confirmation' ? true : { state: 'paused', request_id: 'saved', request_outcome: 'saved' });
+  await action;
+  const message = f.toasts.at(-1).message;
+  assert.match(message, new RegExp(`phase=${stage}; cause=terminal_blur`));
+  assert.match(message, /Other chats can stay open/);
+  assert.match(message, stage === 'setup' ? /request=saved/ : /request=not_submitted/);
+  assert.equal(f.calls.filter(c => c.name === 'setup').length, stage === 'setup' ? 1 : 0);
+  assert.equal(f.renderer.listenerCount('blur'), 0);
+});
+
+test('lost setup reply cannot reuse preflight receipt as evidence that replacement was saved', async t => {
+  const f = fixture(t, { result: {
+    status: { state: 'denied', request_id: 'old', replacement_confirmation_required: true },
+    setup: () => { throw Error('lost_reply'); },
+  } });
+  await f.run('psst-setup'); assert.match(f.toasts.at(-1).message, /request=unknown/);
+});
+
+test('real session switch after request persistence reports saved without displaying stale success', async t => {
+  let release;
+  const f = fixture(t, { result: { setup: () => new Promise(resolve => { release = resolve; }) } });
+  const action = f.run('psst-setup'); while (!release) await new Promise(resolve => setImmediate(resolve));
+  f.route({ type: 'session', sessionID: 'ses_other' });
+  release({ state: 'approved', request_id: 'same', request_outcome: 'saved' }); await action;
+  assert.match(f.toasts.at(-1).message, /phase=setup; cause=session_changed; request=saved/);
+  assert.doesNotMatch(f.toasts.at(-1).message, /authorization approved/);
+  assert.equal(f.calls.at(-1).input.sessionID, 'ses_one');
+});
+
+test('setup owned elsewhere stops at preflight, without replaying confirmation', async t => {
+  const f = fixture(t, { result: { status: { state: 'setup_owned_elsewhere' } } });
+  await f.run('psst-setup'); assert.equal(f.calls.length, 1); assert.equal(f.confirmations.length, 0);
+  assert.match(f.toasts.at(-1).message, /belongs to another chat/);
 });

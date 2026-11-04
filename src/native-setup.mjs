@@ -104,6 +104,31 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
       && pending?.brokerUrl === url && pending.requestId === previous.requestId
       && readSelection(directory)?.connectionFile !== previous.connectionFile);
   }
+  // Read-only reconciliation, including after a cancelled/unknown RPC. Never
+  // infer that no broker effect occurred from a missing response or receipt.
+  async function snapshot(sessionID) {
+    const pending = readPending(directory);
+    if (!pending) return { ...last, request_outcome: beginning ? 'unknown' : 'not_started' };
+    const saved = await savedOwner(pending);
+    if (!saved || saved.flowId !== pending.flowId) return { state: 'setup_owner_recovery_required', request_outcome: 'unknown' };
+    const helper = await loadHelper();
+    const receipt = helper.readApprovalState({ directory, brokerUrl: pending.brokerUrl, clientType: 'opencode' });
+    if (saved.sessionID !== sessionID && (!pending.paused || !requiresReplacement(receipt, pending, pending.brokerUrl)))
+      return { state: 'setup_owned_elsewhere', setup_ownership: 'elsewhere' };
+    const requestId = pending.requestId ?? (receipt?.requestId !== pending.previousRequestId ? receipt?.requestId : undefined);
+    if (receipt && requestId && receipt.requestId !== requestId) return { state: 'setup_owner_recovery_required', request_outcome: 'unknown' };
+    return { ...publicState(receipt ?? { state: 'pending', requestId }),
+      ...(pending.paused && (!receipt || receipt.state === 'pending' || receipt.state === 'approved' && readSelection(directory)?.connectionFile !== receipt.connectionFile) ? { state: 'paused', request_state: receipt?.state ?? 'pending' } : {}),
+      setup_ownership: saved.sessionID === sessionID ? 'current' : 'elsewhere', request_outcome: requestId ? 'saved' : 'unknown' };
+  }
+  async function failure(error, sessionID) {
+    try {
+      const current = await snapshot(sessionID);
+      return { ...current, ...status(sessionID),
+        state: error?.message === 'setup_owner_conflict' ? 'setup_owned_elsewhere' : current.state === 'setup_owned_elsewhere' ? current.state : 'setup_blocked',
+        request_outcome: error?.effect === 'unknown' ? 'unknown' : current.request_outcome };
+    } catch { return { state: 'setup_blocked', request_outcome: 'unknown', ...status(sessionID) }; }
+  }
   async function invoke(name, args, context) {
     return scope.run(async operationSignal => {
       if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !await bound(context.sessionID)) throw new Error('session_mismatch');
@@ -113,17 +138,23 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         return { ...last, ...status(context.sessionID) };
       }
       if (name === 'broker_setup_status') {
+        let current;
+        try { current = await snapshot(context.sessionID); }
+        catch { current = { state: 'setup_blocked', request_outcome: 'unknown' }; }
+        if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(current.state)) return { ...current, ...status(context.sessionID) };
         if (args?.broker_url !== undefined) {
           const url = origin(args.broker_url).href, helper = await loadHelper();
           const previous = helper.readApprovalState({ directory, brokerUrl: url, clientType: 'opencode' });
-          return { ...publicState(previous), ...status(context.sessionID),
+          return { ...current, ...publicState(previous), ...status(context.sessionID),
             replacement_confirmation_required: requiresReplacement(previous, readPending(directory), url) };
         }
-        return { ...last, ...status(context.sessionID) };
+        return { ...current, ...status(context.sessionID) };
       }
       if (name !== 'broker_setup' || !args || Object.keys(args).join(',') !== 'broker_url') throw new Error('invalid_configuration');
       const url = origin(args.broker_url);
       const ownedPending = readPending(directory);
+      if (running && !beginning && owner?.sessionID === context.sessionID && ownedPending?.flowId === owner.flowId && ownedPending.brokerUrl === url.href && !ownedPending.paused)
+        return { ...await snapshot(context.sessionID), ...status(context.sessionID) };
       if (beginning || running || owner && owner.sessionID !== context.sessionID && ownedPending?.flowId === owner.flowId && !ownedPending.paused) throw new Error('setup_owner_conflict');
       beginning = true; beginningController = new AbortController(); beginningSessionID = context.sessionID;
       const beginController = beginningController;
@@ -140,6 +171,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         const resumeApproved = previous?.state === 'approved' && activePending?.brokerUrl === url.href
           && activePending.requestId === previous.requestId && selected?.connectionFile !== previous.connectionFile;
         const replace = previous && previous.state !== 'pending' && !resumeApproved;
+        if (activePending && priorOwner?.sessionID !== context.sessionID && (!replace || activePending.brokerUrl !== url.href)) throw new Error('setup_owner_conflict');
         if (replace && (context.confirmedReplacement !== true || context.replacementRequestId !== previous.requestId)) return { ...publicState(previous), ...status(context.sessionID), replacement_confirmation_required: true };
         if (beginController.signal.aborted || operationSignal.aborted) throw new Error('setup_cancelled');
         const sameRequest = !replace && previous?.requestId && activePending?.brokerUrl === url.href && activePending.requestId === previous.requestId;
@@ -165,11 +197,11 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         if (!replace && previous?.requestId && result.requestId !== previous.requestId) throw new Error('approval_request_mismatch');
         updatePending({ directory, flowId: pending.flowId, requestId: result.requestId });
         const current = { ...pending, requestId: result.requestId };
-        if (!await bound(context.sessionID) || cancelled()) { await pauseOwned(); return { state: 'paused', request_id: result.requestId }; }
+        if (!await bound(context.sessionID) || cancelled()) { await pauseOwned(); return { state: 'paused', request_id: result.requestId, request_outcome: 'saved', setup_ownership: 'current' }; }
         try { await finish(result, current, context.sessionID, operationSignal, flowController); }
         catch (error) { if (!error.retryable) block(current); throw error; }
         if (result.state === 'pending') watch(current, context.sessionID);
-        return { ...publicState(result), ...status(context.sessionID) };
+        return { ...publicState(result), request_outcome: 'saved', setup_ownership: 'current', ...status(context.sessionID) };
       }); } finally { beginning = false; beginningController = undefined; beginningSessionID = undefined; }
     }, context?.signal);
   }
@@ -200,7 +232,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
       if (!pending.paused && pending.requestId && await bound(saved.sessionID)) watch(pending, saved.sessionID);
     } catch { last = { state: 'setup_blocked' }; throw new Error('setup_recovery_blocked'); }
   }
-  return { invoke, resume, event(event) {
+  return { invoke, resume, failure, event(event) {
     if (owner?.sessionID === event?.data?.sessionID && ['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {
       ownerController.abort(); void pauseOwned().catch(() => {});
     }

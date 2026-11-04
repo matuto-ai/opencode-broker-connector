@@ -212,7 +212,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           sessionID: input.sessionID, signal: rpcContext.signal,
           confirmedReplacement: input.replacement_confirmed === true,
           replacementRequestId: input.replacement_request_id,
-        }); } catch { return { state: 'setup_blocked', ...status(input.sessionID) }; }
+        }); } catch (error) { return setup.failure(error, input.sessionID); }
       };
       registrations.push(await ctx.rpc.register(SETUP_RPC, {
         status: (input, context) => invoke('broker_setup_status', input, context),
