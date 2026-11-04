@@ -1,28 +1,39 @@
-# Automatic source and artifact identity
+# Focused connector verification
 
-Every verification run resolves the current Psst `main` to an immutable commit,
-checks out that commit, and fails before integration tests if HEAD differs or the
-fixture contains modified/untracked files. The provenance line records commit,
-tree and package version. An intentional old-version migration fixture remains
-pinned separately; it is never labeled the current server.
+Use Node 24.19.0 or newer in the Node 24 line:
 
-Package tests build `npm pack` from the checkout, install that actual tarball in a
-disposable prefix, compare every installed file byte-for-byte to source, and
-require every runtime file to be included. The source commit, dirty flag, tarball
-SHA-256 and per-file SHA-256 values are emitted as `PACKAGE_PROVENANCE`. In CI the
-checkout commit must match `GITHUB_SHA`. A same-version stale artifact fails too.
+```sh
+npm ci --ignore-scripts
+npm run check
+npm test
+```
 
-The installed Claude MCP process must initialize and expose its native tool
-catalog with the package version. OpenCode's installed native plugin reports
-`connector_version` from its own package metadata; the existing real-host/TUI
-suite also checks this live status. The isolated OpenCode host-API fixture is
-component evidence, not real-host/model acceptance.
+`npm test` uses the Node test runner directly and runs every `test/*.test.mjs` file.
+There are no local/integration/host partitions, optional heavy probes or skip gates.
+CI's single `verify` job runs the same syntax and unit commands. The only npm
+dependency is the runtime schema validator, Zod.
 
-Negative regressions cover stale version, stale source bytes with an unchanged
-version, an omitted runtime module, mismatched running version, wrong source
-commit and dirty fixture. No manual release/version edit is required to assemble
-these tests. Release verification retains the exact successful tarball and its
-SHA-256 receipt; publication uses those bytes with lifecycle scripts disabled,
-not a second package build. The official host binaries remain explicit compatibility targets;
-this gate does not silently upgrade host runtimes or mutate production.
+## What belongs here
 
+Tests cover this connector's observable behavior: configuration and private-file
+validation, native identity and ownership, setup state/confirmation, scoped tool
+routing, message formatting, exact delivery receipts, cancellation, resource
+cleanup, and recovery after uncertain or failed effects. Host calls, transport and
+approval responses use in-process fakes. Temporary files and SQLite journals are
+used where persistence or ownership is the connector behavior being tested; no
+broker process, OpenCode executable, container, package installation or network is
+started by the suite. Vendored client code remains a production dependency, not a
+second broker test suite.
+
+Do not add snapshots of upstream broker/renderer implementations or assertions
+that only check workflow text. Add a focused regression at the connector boundary
+for a real bug. Unit results are not native-host, model-response or deployment
+acceptance evidence.
+
+## Release packaging
+
+`npm run pack:check` separately checks the npm file list for runtime entry points
+and accidental tests, credentials or state. The release workflow runs it after the
+unit suite, then creates one archive and publishes that exact archive. It does not
+install the archive or launch native hosts. Publication still requires the owner's
+release workflow; ordinary push/PR verification never publishes.

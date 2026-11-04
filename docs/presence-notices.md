@@ -14,4 +14,8 @@ Confirmed/obsolete tombstones are retained eight days, then pruned; the broker a
 
 ## Validation scope
 
-`test/presence-notices.test.mjs` covers context-only ACK, restart, unknown native outcome, ACK failure, immutable payload, capability gating, cancellation, selection, bounded pagination, invalid metadata, durable-write failure and the real HTTP broker's grace/ACK flow. Native APIs in those tests are fixtures; they do not constitute an authenticated model response or actual interactive TUI acceptance proof. Existing official OpenCode library/loader tests run separately. No release or deployment is part of this change.
+`test/presence-notices.test.mjs` covers context-only ACK, restart, unknown native
+outcome, ACK failure, immutable payload, capability gating, cancellation, selection,
+bounded pagination, invalid metadata and durable-write failure. Native and transport
+APIs are in-process fakes. These unit checks do not prove broker grace-period behavior,
+authenticated model response or actual interactive TUI acceptance.

@@ -48,12 +48,10 @@ never overrides them. Existing unread and uncertain operations remain intact.
 
 ## Validation limits
 
-Unit and real HTTP-broker tests exercise availability, identity preservation and
-reconnection. The official package loader validates the same-package entries.
-Required official-host CI now exercises the actual TUI and URL dialog, native
-routing/restart and human-input/permission preservation. It deliberately uses a
-nonexistent provider, so authenticated model response and active toolchain/abort
-acceptance remain separate end-to-end checks. See [setup acceptance](setup-acceptance.md).
+Unit tests exercise connector selection, identity, cancellation and recovery with
+in-process native and transport fakes. They do not start OpenCode or a broker.
+Authenticated model response and native-host compatibility remain separate product
+acceptance concerns. See [setup acceptance](setup-acceptance.md).
 
 ## Display metadata
 

@@ -25,7 +25,7 @@ routing. Direct calls retain individually persisted native IDs and original
 timestamps. No invented child index, random retry ID or content-based dedup is
 used. An obsolete wrapper call remains fail-closed instead of sending ambiguously.
 
-Tests run the official 2.2.5 Promise adapter, tool registry/snapshot and CodeMode
-executor with a real HTTP broker, including identical intentional parallel sends,
-reload replay, payload conflicts, resend and replay after journal garbage collection.
-This is host-library/executor proof, not an authenticated model turn.
+Unit tests exercise scoped outgoing calls, stable operation IDs, payload conflicts,
+cancellation and recovery using an in-process transport and native API. They also
+assert that send/resend bypass CodeMode while other tools retain default routing.
+They do not run OpenCode's executor or prove an authenticated model turn.

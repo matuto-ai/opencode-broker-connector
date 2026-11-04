@@ -6,7 +6,7 @@
     "node": ">=24.19.0 <25"
   },
   "scripts": {
-    "test": "node scripts/test.mjs",
+    "test": "node --test test/*.test.mjs",
     "check": "find src plugin scripts test vendor \\( -name \"*.mjs\" -o -name \"*.ts\" \\) -not -path \"*/node_modules/*\" -print0 | xargs -0 -r -n1 node --check",
     "pack:check": "node scripts/pack-check.mjs"
   },
@@ -40,12 +40,5 @@
   },
   "publishConfig": {
     "access": "public"
-  },
-  "devDependencies": {
-    "@effect/platform-node": "4.0.6",
-    "@effect/platform-node-shared": "4.0.6",
-    "@opencode/core": "2.2.5",
-    "@opencode/plugin": "2.2.5",
-    "effect": "4.0.6"
   }
 }

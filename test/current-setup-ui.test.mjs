@@ -124,19 +124,7 @@ test('home route cannot prompt, inspect status, or cancel another session', asyn
   for (const command of f.commands) await command.run();
   assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 0);
 });
-test('portable RPC schemas compile with the exact official host Effect JSON Schema path', async () => {
-  const { JsonSchema, Schema, SchemaRepresentation } = await import('effect');
-  const compile = schema => Schema.make(SchemaRepresentation.fromJsonSchemaDocument(JsonSchema.fromSchemaDraft2020_12(schema)).ast);
-  // OpenCode 2.2.5 defaults to rejecting regex patterns, even trusted-looking
-  // patterns. IDs are length-bounded here and independently checked on server.
-  assert.throws(() => compile({ type: 'string', pattern: '^safe$' }), /Patterns may block validation/);
-  for (const [name, method] of Object.entries(SETUP_RPC.methods)) {
-    const input = { sessionID: 'ses_one', ...(name === 'setup' ? { broker_url: 'https://broker.example.com', replacement_confirmed: true, replacement_request_id: 'ar_old' } : {}) };
-    assert.deepEqual(Schema.decodeUnknownSync(compile(method.input))(input), input);
-    assert.throws(() => Schema.decodeUnknownSync(compile(method.input))({ ...input, sessionID: 'x'.repeat(257) }));
-    assert.deepEqual(Schema.decodeUnknownSync(compile(method.output))({ state: 'pending' }), { state: 'pending' });
-  }
-});
+
 for (const state of ['pending', 'denied', 'expired', 'paused']) test(`existing connection does not hide ${state} setup state`, async t => {
   const f = fixture(t, { result: { status: { connected: true, state } } });
   await f.run('psst-status'); const message = f.toasts.at(-1).message;

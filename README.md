@@ -104,19 +104,21 @@ never another startup enrollment. No direct host-database access is used.
 ## Verification
 
 ```sh
-npm ci --ignore-scripts --omit=peer
+npm ci --ignore-scripts
 npm run check
 npm test
 npm run pack:check
 ```
 
-Tests install the actual root tarball with Git unavailable, use the
-official 2.2.5 package loader to select the native server entry, and cover private
-state, exact receipts, ownership, recovery and cancellation. The required CI host job downloads a checksum-pinned official OpenCode 2.2.5
-executable and exercises the real server/TUI against a disposable TLS authority.
-Local probes use `OPENCODE_BINARY`. The package never installs a host or provider.
-Authenticated model execution remains a separately documented acceptance gate,
-not something a nonexistent-provider or native-admission test proves.
+The unit suite checks connector configuration, native session identity, setup state,
+message presentation, scoped tool calls, delivery receipts, cancellation and recovery.
+Host and broker boundaries use in-process fakes; persistence checks use disposable
+local files and SQLite journals. No OpenCode binary, broker server, container,
+network access or provider credentials are needed. See [verification](docs/verification.md).
+
+CI runs source syntax and this same unit suite. Package file-list checks remain a
+separate release safeguard, not an installed-host or end-to-end test. Unit results
+do not prove authenticated native model execution.
 
 MIT. Vendored Psst code keeps its license and exact integrity pins.
 
@@ -154,7 +156,3 @@ connector intentionally continues exposing its existing eight tools, not those t
 new tools; unknown future SDK catalog changes still fail closed.
 
 Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
-
-Official OpenCode server/TUI admission and TLS approval run in a dedicated,
-credential-free CI job. See [official-host CI evidence](docs/official-host-ci.md)
-for pinned inputs, local reproduction, and the separate authenticated-model gate.
