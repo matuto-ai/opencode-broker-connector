@@ -74,40 +74,19 @@ bindings, multiple matching anchors or corruption do not permit a reset. Classic
 journals without a current native binding are retained and require explicit
 migration work; they are never silently adopted.
 
-## Evidence and remaining acceptance
+## Test scope and remaining acceptance
 
-Required CI combines independent layers; they are not interchangeable:
+The maintained suite covers connector behavior with in-process native/transport
+fakes and temporary private storage: exact session bindings, setup cancellation,
+late results, selection CAS, attachment rollback, malformed state, expiry handling,
+identity separation, delivery receipts and uncertainty recovery.
 
-- Local lifecycle tests cover duplicate/uncertain results, cancellation around
-  persistence and native checks, late approval, original-selection CAS,
-  attachment rollback, corruption, validated expiry, and 30 independently owned
-  SQLite mailboxes with identical labels.
-- The TLS persistence gate removes/recreates three Docker containers, retains the
-  private installation, and reconnects 30 same-name sessions using one enrollment
-  POST. It verifies unread preservation, address isolation and no repeated native
-  admission using a synthetic native API. Local process-only preflight is labeled
-  separately and is not Docker proof.
-- A clean checkout of v0.5.1 commit
-  `04160a087e5aeb5237ab74ebddfcc720aa72327c` creates the original credential and
-  journal using its own reference implementation. The candidate preserves those
-  files, mailbox path, identity, unread message and uncertain outgoing key. This
-  uses synthetic enrollment/native APIs with a real loopback HTTP broker.
-- The official OpenCode server and actual TUI use real verified TLS admin approval.
-  They exercise restart, unread admission, independent session addresses, native
-  RPC cancellation/replacement, queued human input, permission preservation and
-  failed-execution behavior. A second required pass runs these same official-host
-  scenarios in newly created server and TUI Docker containers, confirms their
-  distinct IDs and complete removal before reopening, and retains the documented
-  private/native roots with the same UID. This actual-host gate is separate from
-  the synthetic 30-session gate above. Fake-Docker cleanup tests are only local
-  preflight; actual container execution requires Docker CI. See
-  [official-host CI](official-host-ci.md).
+Real broker/server, OpenCode TUI, package-install, container recreation and
+end-to-end harnesses have been removed. There are no opt-in heavy test stages.
+Historical results remain in the repository's pull-request history; they are not
+current CI checks or proof of the current environment.
 
-The exact scoped package is not yet published, so the published-package installer
-probe remains opt-in. Publishing or changing account credentials is not part of
-this candidate. Authenticated provider execution, active model toolchain/abort
-behavior and automatic real model response still require an authorized native
-host/provider. A nonexistent provider proves native admission and failure
-handling, not successful model processing. Issue #8 remains open until its
-remaining authenticated and release-dependent evidence is recorded; no synthetic
-fixture is presented as that evidence.
+Unit success does not establish authenticated provider execution, active model
+toolchain/abort behavior, release availability or native-host compatibility.
+Issue #8 tracks the separate product acceptance work. This test cleanup does not
+publish a package, provision credentials, deploy, or close that issue.

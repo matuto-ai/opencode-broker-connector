@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, cpSync, appendFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { verifyReference, REFERENCE_COMMIT } from '../src/reference-pin.mjs';
 
 test('exact reviewed reference pin rejects tampered source before import', t => {
-  const source = process.env.BROKER_REFERENCE_DIR ?? resolve('../ai-agent-msg-broker');
+  const source = fileURLToPath(new URL('../vendor/broker', import.meta.url));
   assert.equal(REFERENCE_COMMIT, 'f32ddc79ec7b812062ed3f6de7b9a0c12a7128f3');
   verifyReference(source);
   const directory = mkdtempSync(join(tmpdir(), 'reference-pin-test-'));

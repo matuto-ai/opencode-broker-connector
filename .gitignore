@@ -1,7 +1,3 @@
 node_modules/
 .state/
 *.log
-
-.test-reference/
-
-.test-broker/

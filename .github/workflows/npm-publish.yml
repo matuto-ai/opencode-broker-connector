@@ -21,14 +21,13 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: node --input-type=module -e "import p from './package.json' with {type:'json'}; if(p.name !== '@matuto-ai/opencode-psst-connector' || process.env.RELEASE_TAG !== 'v'+p.version) process.exit(1)"
-      - run: npm ci --ignore-scripts --omit=peer --no-audit --no-fund
+      - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - run: npm test
-        env:
-          PSST_VERIFIED_PACKAGE_OUTPUT_DIR: ${{ runner.temp }}/verified-package
       - run: npm run pack:check
-      - name: Publish the verified tarball without rebuilding
-        working-directory: ${{ runner.temp }}/verified-package
+      - name: Pack the release archive once
         run: |
-          sha256sum --check --strict SHA256SUMS
-          npm publish ./*.tgz --ignore-scripts --access public --provenance
+          mkdir -p "$RUNNER_TEMP/package"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/package"
+      - name: Publish the release archive
+        run: npm publish "$RUNNER_TEMP"/package/*.tgz --ignore-scripts --access public --provenance

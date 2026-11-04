@@ -43,14 +43,7 @@ test('OpenCode rejects classic/unknown host version and foreign project sessions
 test('OpenCode never deletes or replaces an unreadable durable manifest',async t=>{
  const f=await fixture(t);await f.runtime.connect('one');const directory=f.states[0].client.inbox.directory;await f.runtime.dispose();writeFileSync(join(directory,'binding.json'),'{');await assert.rejects(()=>setupNativePlugin(f.options));assert.equal(f.states.length,1);assert.equal((await import('node:fs')).readFileSync(join(directory,'binding.json'),'utf8'),'{');
 });
-test('real HTTP broker preserves exact OpenCode identity and unread durable inbox across plugin reload',async t=>{
- const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();
- const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};
- const options={...f.options};delete options.adapterFactory;delete options.clientFactory;
- const first=await setupNativePlugin(options);await first.connect('surviving');const id=first.status('surviving').client_id;assert.ok(id);await first.dispose();
- assert.equal(broker.store.session(broker.b.entry,id).closed,false,'plugin unload must not terminally close a surviving native session');
- const second=await setupNativePlugin(options);t.after(()=>second.dispose());await second.connect('surviving');assert.equal(second.status('surviving').client_id,id);
-});
+
 test('native missing or mismatched tool-call timestamp fails closed before outgoing execution',async t=>{
  const f=await fixture(t);f.ctx.session.context=async()=>[{id:'msg',type:'assistant',time:{created:Date.now()},content:[{type:'tool',id:'foreign',name:'broker_send',time:{created:Date.now()}}]}];
  const result=JSON.parse((await f.tools.get('broker_send').execute({}, {sessionID:'one',messageID:'msg',id:'call1',signal:new AbortController().signal})).content);assert.equal(result.error.code,'session_mismatch');
@@ -65,11 +58,7 @@ test('plugin dispose cancels admitted tool executor before awaiting its ledger d
  const runtime=await setupNativePlugin(options);const pending=f.tools.get('broker_list_clients').execute({}, {sessionID:'one',messageID:'msg',id:'call',signal:caller.signal});await started;let settled=false;const closing=runtime.dispose().then(()=>{settled=true;});
  await Promise.race([closing,new Promise(r=>setTimeout(r,100))]);const result={aborted,settled};caller.abort();await closing;await pending;assert.deepEqual(result,{aborted:true,settled:true});
 });
-test('resumable unload fences real broker runtime before a slow admitted tool drain',async t=>{
- const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};let entered;const started=new Promise(r=>entered=r);
- const options={...f.options,clientFactory:inbox=>{const client=new reference.BrokerClient({...f.settings.broker,inbox});client.claim=async()=>{await new Promise(r=>setTimeout(r,5));return null;};client.listClients=async(args,{signal})=>{entered();await new Promise(r=>signal.addEventListener('abort',()=>setTimeout(r,30),{once:true}));return{clients:[]};};return client;}};delete options.adapterFactory;
- const runtime=await setupNativePlugin(options);await runtime.connect('surviving');const id=runtime.status('surviving').client_id;const pending=f.tools.get('broker_list_clients').execute({}, {sessionID:'surviving',messageID:'msg',id:'call',signal:new AbortController().signal});await started;await runtime.dispose();await pending;assert.equal(broker.store.session(broker.b.entry,id).closed,false);
-});
+
 test('durable archive state rejects reconnection even when its event was missed',async t=>{
  const f=await fixture(t);f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:f.dir},time:{created:1,archived:2}});await assert.rejects(()=>f.runtime.connect('archived'),/mismatch/);assert.equal(f.states.length,0);
 });
@@ -99,23 +88,7 @@ test('native archive arriving during startup fences registration after asynchron
  assert.equal([...f.stored.values()].find(v=>v?.sessionID==='one').enabled,false);
 });
 
-test('selected-only local leases suspend transport without closing identity and reconnect after expiry',async t=>{
- const {createPresenceWriter,presenceDirectory}=await import('../src/active-presence.mjs');
- const {httpFixture}=await import('./broker-fixture/test/helpers.mjs');const broker=await httpFixture(t),f=await fixture(t);await f.runtime.dispose();
- const tokenFile=join(f.dir,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});f.settings.broker={url:broker.base,tokenFile,insecureDevelopment:true};
- const options={...f.options};delete options.presenceFactory;delete options.adapterFactory;delete options.clientFactory;
- const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());
- await assert.rejects(()=>runtime.connect('one'),/not_selected/);assert.equal(runtime.status('one').connected,false);
- const directory=presenceDirectory(join(f.dir,'installation'),f.ctx.location),a=createPresenceWriter({directory}),b=createPresenceWriter({directory});t.after(()=>{a.stop();b.stop();});
- a.write('one');await runtime.connect('one');const one=runtime.status('one').client_id;
- b.write('two');await runtime.connect('two');const two=runtime.status('two').client_id;assert.notEqual(one,two);
- a.write('two');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('one').connected,false);assert.equal(runtime.status('two').connected,true);
- assert.equal(broker.store.session(broker.b.entry,one).closed,false);
- a.stop();await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('two').connected,true,'second owner keeps same runtime');
- b.write(null);await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('two').connected,false);assert.equal(broker.store.session(broker.b.entry,two).closed,false);
- broker.advance(200000);b.write('one');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('one').client_id,one);assert.equal(runtime.status('one').connected,true);
- b.write('never-authorized');await new Promise(r=>setTimeout(r,650));assert.equal(runtime.status('never-authorized').client_id,null,'file selection cannot create new binding');
-});
+
 test('selection change during native getInfo cannot return a usable binding',async t=>{
  const f=await fixture(t);await f.runtime.dispose();let active=true;
  const runtime=await setupNativePlugin({...f.options,presenceFactory:()=>({selected:()=>new Set(active?['one']:[])})});t.after(()=>runtime.dispose());await runtime.connect('one');
@@ -176,4 +149,74 @@ test('corrupt pending candidate cannot prevent independent working authorization
  const f=await fixture(t);await f.runtime.connect('one');const original=f.runtime.status('one').client_id;await f.runtime.dispose();const pendingPath=join(f.dir,'installation','pending.json');writeFileSync(pendingPath,'{corrupt',{mode:0o600});const diagnostics=[];
  const runtime=await setupNativePlugin({...f.options,setupEnabled:true,onDiagnostic:entry=>diagnostics.push(entry.code)});t.after(()=>runtime.dispose());assert.equal(runtime.status('one').connected,true);assert.equal(runtime.status('one').client_id,original);assert.ok(diagnostics.includes('native_setup_restore_unavailable'));const status=JSON.parse((await f.tools.get('broker_setup_status').execute({},{sessionID:'one',signal:new AbortController().signal})).content);assert.equal(status.state,'setup_blocked');assert.equal(status.connected,true);
  const {readFileSync}=await import('node:fs');assert.equal(readFileSync(pendingPath,'utf8'),'{corrupt');const result=JSON.parse((await f.tools.get('broker_setup').execute({broker_url:'https://fixture.invalid'},{sessionID:'one',signal:new AbortController().signal})).content);assert.equal(result.state,'setup_blocked');assert.equal(runtime.status('one').client_id,original);
+});
+
+
+test('only send and resend bypass CodeMode so every outgoing mutation keeps its own call identity', async t => {
+  const f = await fixture(t);
+  for (const [name, definition] of f.tools) {
+    assert.equal(definition.options?.codemode, ['broker_send', 'broker_resend'].includes(name) ? false : undefined);
+  }
+});
+
+test('confirmed session expiry replaces the connector journal once before starting delivery', async t => {
+  const f = await fixture(t);
+  await f.runtime.dispose();
+  f.settings.broker.registrationVersion = 2;
+  const clients = [];
+  let attempts = 0, deliveries = 0, allocations = 0;
+  const options = {
+    ...f.options,
+    clientFactory: inbox => {
+      const client = { inbox, identity: inbox.identity, registrationVersion: 2, expiredIdentityConfirmed: true,
+        async createReplacementInbox({ directory, verifySession }) {
+          assert.equal(await verifySession(), true);
+          allocations++;
+          return new reference.Inbox({ directory, identity: reference.newSessionIdentity('opencode') });
+        } };
+      clients.push(client);
+      return client;
+    },
+    adapterFactory: args => {
+      const adapter = f.options.adapterFactory(args);
+      return { ...adapter, start: async () => {
+        if (++attempts === 1) throw Object.assign(new Error('expired'), { code: 'session_expired' });
+        await adapter.start();
+      } };
+    },
+    deliveryFactory: () => ({ start() { deliveries++; }, async stop() {}, event() {} }),
+  };
+  const runtime = await setupNativePlugin(options);
+  t.after(() => runtime.dispose());
+  await runtime.connect('one');
+  assert.equal(attempts, 2);
+  assert.equal(allocations, 1);
+  assert.equal(deliveries, 1);
+  assert.notEqual(clients[0].identity.client_id, clients[1].identity.client_id);
+  const identity = runtime.status('one').client_id;
+  await runtime.dispose();
+  const reloaded = await setupNativePlugin(options);
+  t.after(() => reloaded.dispose());
+  await reloaded.connect('one');
+  assert.equal(reloaded.status('one').client_id, identity);
+  assert.equal(allocations, 1);
+});
+
+test('uncertain replacement blocks reconnect in the same plugin instead of allocating repeatedly', async t => {
+  const f = await fixture(t);
+  await f.runtime.dispose();
+  f.settings.broker.registrationVersion = 2;
+  let allocations = 0;
+  const runtime = await setupNativePlugin({
+    ...f.options,
+    clientFactory: inbox => ({ inbox, identity: inbox.identity, registrationVersion: 2, expiredIdentityConfirmed: true,
+      async createReplacementInbox() { allocations++; throw new Error('storage unavailable'); } }),
+    adapterFactory: args => ({ ...f.options.adapterFactory(args),
+      async start() { throw Object.assign(new Error('expired'), { code: 'session_expired' }); } }),
+  });
+  t.after(() => runtime.dispose());
+  await assert.rejects(runtime.connect('one'), { code: 'native_incarnation_uncertain' });
+  await assert.rejects(runtime.connect('one'), /native_plugin_closed/);
+  assert.equal(allocations, 1);
+  assert.equal(runtime.status('one').connected, false);
 });

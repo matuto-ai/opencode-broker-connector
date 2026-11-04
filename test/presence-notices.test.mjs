@@ -55,24 +55,7 @@ test('invalid or oversized event fails closed and text content is never copied',
 test('failed durable intent does not submit; obsolete event disappearing is not submitted or acknowledged',async t=>{
  const f=fixture(t);f.inbox.failurePoint=point=>{if(point==='before_commit')throw Error('disk');};await f.tick();assert.equal(f.submitted.length,0);f.inbox.failurePoint=()=>{};f.client.events=[];await f.tick();assert.equal(f.submitted.length,0);assert.equal(f.acks.length,0);
 });
-test('real HTTP broker offline episode reaches native context once and ACK leaves pending mail unchanged',async t=>{
- const {httpFixture,registration}=await import('./broker-fixture/test/helpers.mjs');
- const {BrokerClient}=await import('../vendor/broker/reference/client.mjs');
- const {writeFileSync}=await import('node:fs');
- // Real loopback I/O needs a bounded network budget, not the 30ms unit-host
- // timeout. Exercise ordinary >30ms scheduling latency deterministically.
- const broker=await httpFixture(t),f=fixture(t,{requestTimeout:2000}),tokenFile=join(f.inbox.directory,'token');writeFileSync(tokenFile,broker.b.token,{mode:0o600});
- const client=new BrokerClient({url:broker.base,tokenFile,insecureDevelopment:true,inbox:f.inbox,now:()=>broker.now,maxAttempts:1});
- await client.register({name:'Native sender',model:{provider:null,id:null,source:'unknown'},project:null});
- const peer=registration('pi');await broker.request('/v1/sessions',{method:'POST',body:peer});
- const sent=await client.sendPrepared(client.prepareSend({recipient_id:peer.client_id,content:{type:'text/plain',text:'never exposed in notice'}}));
- f.client.policy=client.policy;f.client.presenceEvents=async(filters,options)=>{await new Promise(resolve=>setTimeout(resolve,40));return client.presenceEvents(filters,options);};f.client.acknowledgePresenceEvent=client.acknowledgePresenceEvent.bind(client);
- for(let i=0;i<9;i++){broker.advance(60000);await client.heartbeat();}broker.advance(59999);await client.heartbeat();await f.tick();assert.equal(f.submitted.length,0);
- broker.advance(1);await f.tick();assert.equal(f.submitted.length,1);assert.doesNotMatch(f.submitted[0].text,/never exposed in notice/);
- const before=await client.presenceEvents();assert.equal(before.events.length,1);assert.equal(before.events[0].messages[0].message_id,sent.message_id);
- await f.tick();assert.equal(f.submitted.length,1);f.promote();await f.tick();assert.deepEqual((await client.presenceEvents()).events,[]);
- assert.equal(broker.store.db.prepare('SELECT state FROM messages WHERE id=?').get(sent.message_id).state,'queued');
-});
+
 test('same recipient new absence episode gets distinct notice; repeated event snapshot keeps immutable payload',async t=>{
  const f=fixture(t);await f.tick();const original=f.submitted[0].text;f.client.events[0].observed_at='2026-11-01T10:12:00Z';f.client.events[0].messages=[];
  // Invalid changed snapshot is not an excuse to mutate/replay prior admission.

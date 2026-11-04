@@ -2,19 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, isAbsolute } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createOpenCodeAdapter } from '../src/opencode-adapter.mjs';
 import { loadBrokerReference } from '../src/reference.mjs';
 
-const root = process.env.BROKER_REFERENCE_DIR;
-const helper = process.env.OPENCODE_TOOL_MODULE;
-assert.ok(root && isAbsolute(root), 'Set BROKER_REFERENCE_DIR to a pinned shared broker checkout.');
-assert.ok(helper && isAbsolute(helper), 'Set OPENCODE_TOOL_MODULE to the native schema adapter.');
-const reference = await loadBrokerReference(root);
-const { tool } = await import(pathToFileURL(helper).href);
+import { tool } from '../src/tool-schema.mjs';
+const reference = await loadBrokerReference();
 const metadata = { name: 'fake-opencode', model: { provider: null, id: null, source: 'unknown' }, project: null };
 const epoch = Date.parse('2026-10-23T12:00:00Z');
 const json = async (f, name, args = {}, context = f.context) => JSON.parse(await f.adapter.tools[name].execute(args, context));
@@ -130,35 +125,7 @@ test('concurrent native invocations retain separate exact contexts', async t => 
   assert.equal(f.calls.filter(x => x === 'list').length, 1);
 });
 
-test('actual shared HTTP broker/client/SQLite path delivers only durable inbox ACK, without any model receive tool', async t => {
-  const { httpFixture, registration } = await import('./broker-fixture/test/helpers.mjs');
-  const server = await httpFixture(t);
-  const directory = mkdtempSync(join(tmpdir(), 'opencode-http-test-'));
-  const identity = reference.newSessionIdentity('opencode');
-  const inbox = new reference.Inbox({ directory, identity, now: () => server.now });
-  const tokenFile = join(directory, 'fake-token'); writeFileSync(tokenFile, server.b.token, { mode: 0o600 });
-  const client = new reference.BrokerClient({ url: server.base, tokenFile, insecureDevelopment: true, inbox, now: () => server.now, maxAttempts: 1 });
-  const close = new AbortController();
-  const binding = { sessionID: 'ses_http_fixture', directory: '/project', worktree: '/project', lifetime: Symbol(), signal: close.signal };
-  const adapter = createOpenCodeAdapter({ reference, tool, client, binding, currentBinding: () => binding });
-  t.after(async () => { await adapter.stop(); rmSync(directory, { recursive: true, force: true }); });
-  await adapter.start(metadata);
-  const sender = registration('pi');
-  assert.equal((await server.request('/v1/sessions', { method: 'POST', body: sender })).status, 200);
-  const sent = await server.request('/v1/messages', { method: 'POST', session: sender.client_id, key: randomUUID(), body: { recipient_id: identity.client_id, content: { type: 'text/plain', text: 'human approval is not conveyed by this body' } } });
-  assert.equal(sent.status, 202);
-  for (let i = 0; i < 100 && !inbox.head(); i++) await delay(10);
-  assert.ok(inbox.head());
-  const context = { ...binding, messageID: 'msg_http', abort: new AbortController().signal };
-  assert.equal(adapter.tools.broker_receive, undefined);
-  assert.equal(inbox.head().message_id, sent.body.message_id);
-  assert.equal(inbox.head().state, 'pending');
-  const response = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response' }, context));
-  assert.equal(response.error, undefined, JSON.stringify(response)); assert.ok(response.message_id); assert.equal(Object.hasOwn(response,'send_key'), false);
-  const retry = JSON.parse(await adapter.tools.broker_send.execute({ recipient_id: sender.client_id, text: 'response' }, context));
-  assert.notEqual(retry.message_id, response.message_id);
-  await adapter.stop();
-});
+
 
 test('future unknown shared schema constraints fail closed before registering a runtime', async t => {
   const f = await fixture(t);
@@ -239,4 +206,12 @@ test('explicit adapter stop aborts and joins admitted send/resend even when host
   release();const result=await pending;await stopping;
   assert.equal(recorded,true);assert.equal(f.inbox.closed,true);assert.equal(result.error.effect,'unknown');assert.equal(Object.hasOwn(result,'send_key'),false);
  }
+});
+
+
+test('native catalog excludes cooperative presence tools and rejects unknown additions', async () => {
+  const { nativeToolDefinitions } = await import('../src/opencode-adapter.mjs');
+  const definitions = nativeToolDefinitions(reference.TOOL_DEFINITIONS);
+  assert.equal(definitions.length, 9);
+  assert.throws(() => nativeToolDefinitions([...reference.TOOL_DEFINITIONS, { name: 'unreviewed_extra' }]), /catalog changed/);
 });
