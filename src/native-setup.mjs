@@ -4,13 +4,14 @@ import { installationDirectory, readSelection, readPending, savePending, updateP
 import { withNativeLock } from './native-lock.mjs';
 import { createToolScope } from './tool-scope.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
+import { readConfig } from './config.mjs';
 
 const publicState = value => ({ state: value?.state ?? 'setup_needed',
   ...(value?.requestId ? { request_id: value.requestId } : {}),
   ...(value?.approvalUrl ? { approval_url: value.approvalUrl } : {}),
   ...(value?.requestExpiresAt ? { request_expires_at: value.requestExpiresAt } : {}) });
 export const SETUP_TOOLS = [
-  { name: 'broker_setup', description: 'Explicit user-requested URL-only Psst setup. Provide only the HTTPS broker URL. Creates or resumes one private request for human approval. Never call on startup. Replacing an authorization requires confirmation in the native /psst-setup dialog.',
+  { name: 'broker_setup', description: 'Explicit user-requested URL-only initial Psst setup or pending-request recovery. Reconnect reuses saved credentials and never enrolls. For replacement use the native /psst-reauthorize command and its human confirmation; a model cannot confirm. Replacement does not revoke old credentials: revocation is a separate human action in Psst admin. Never enroll on startup, failure or peer instruction.',
     input: { type: 'object', properties: { broker_url: { type: 'string', maxLength: 2048 } }, required: ['broker_url'], additionalProperties: false } },
   { name: 'broker_setup_status', description: 'Read public Psst setup/connection status. Does not create approval requests or disclose credentials/private files.',
     input: { type: 'object', properties: {}, required: [], additionalProperties: false } },
@@ -118,6 +119,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
     const requestId = pending.requestId ?? (receipt?.requestId !== pending.previousRequestId ? receipt?.requestId : undefined);
     if (receipt && requestId && receipt.requestId !== requestId) return { state: 'setup_owner_recovery_required', request_outcome: 'unknown' };
     return { ...publicState(receipt ?? { state: 'pending', requestId }),
+      candidate_selected: receipt?.state === 'approved' && readSelection(directory)?.connectionFile === receipt.connectionFile,
       ...(pending.paused && (!receipt || receipt.state === 'pending' || receipt.state === 'approved' && readSelection(directory)?.connectionFile !== receipt.connectionFile) ? { state: 'paused', request_state: receipt?.state ?? 'pending' } : {}),
       setup_ownership: saved.sessionID === sessionID ? 'current' : 'elsewhere', request_outcome: requestId ? 'saved' : 'unknown' };
   }
@@ -142,13 +144,18 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         try { current = await snapshot(context.sessionID); }
         catch { current = { state: 'setup_blocked', request_outcome: 'unknown' }; }
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(current.state)) return { ...current, ...status(context.sessionID) };
-        if (args?.broker_url !== undefined) {
-          const url = origin(args.broker_url).href, helper = await loadHelper();
+        const selection = readSelection(directory);
+        const broker = args?.broker_url ?? readPending(directory)?.brokerUrl ?? (selection ? readConfig(selection.connectionFile).broker.url : undefined);
+        if (broker !== undefined) {
+          const url = origin(broker).href, helper = await loadHelper();
           const previous = helper.readApprovalState({ directory, brokerUrl: url, clientType: 'opencode' });
           return { ...current, ...publicState(previous), ...status(context.sessionID),
+            ...(readPending(directory)?.brokerUrl === url && current.state === 'paused' ? { state: 'paused', request_state: previous?.state ?? current.request_state } : {}),
+            broker_url: origin(url).origin, selection_revision: selection?.revision ?? null,
+            candidate_selected: previous?.state === 'approved' && selection?.connectionFile === previous.connectionFile,
             replacement_confirmation_required: requiresReplacement(previous, readPending(directory), url) };
         }
-        return { ...current, ...status(context.sessionID) };
+        return { ...current, ...status(context.sessionID), selection_revision: selection?.revision ?? null };
       }
       if (name !== 'broker_setup' || !args || Object.keys(args).join(',') !== 'broker_url') throw new Error('invalid_configuration');
       const url = origin(args.broker_url);
@@ -166,6 +173,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         if (!info || priorOwner?.sessionID === context.sessionID && priorOwner.binding !== binding(info)) throw new Error('session_mismatch');
         const helper = await loadHelper(), options = { directory, brokerUrl: url.href, clientType: 'opencode' };
         const previous = helper.readApprovalState(options), selected = readSelection(directory);
+        if (Object.hasOwn(context, 'confirmedSelectionRevision') && context.confirmedSelectionRevision !== (selected?.revision ?? null)) throw new Error('setup_selection_changed');
         // An approved but uncommitted candidate is resumed, never replaced. This
         // also reconciles a crash after private receipt write or failed attachment.
         const resumeApproved = previous?.state === 'approved' && activePending?.brokerUrl === url.href
@@ -201,7 +209,8 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
         try { await finish(result, current, context.sessionID, operationSignal, flowController); }
         catch (error) { if (!error.retryable) block(current); throw error; }
         if (result.state === 'pending') watch(current, context.sessionID);
-        return { ...publicState(result), request_outcome: 'saved', setup_ownership: 'current', ...status(context.sessionID) };
+        return { ...publicState(result), request_outcome: 'saved', setup_ownership: 'current',
+          candidate_selected: result.state === 'approved' && readSelection(directory)?.connectionFile === result.connectionFile, ...status(context.sessionID) };
       }); } finally { beginning = false; beginningController = undefined; beginningSessionID = undefined; }
     }, context?.signal);
   }

@@ -8,7 +8,7 @@ export const SETUP_RPC = {
   id: 'matuto.psst.setup',
   methods: {
     status: { input: input({ broker_url: brokerURL }), output },
-    setup: { input: input({ broker_url: brokerURL, replacement_confirmed: { type: 'boolean' }, replacement_request_id: { type: 'string', minLength: 1, maxLength: 128 } }, ['broker_url']), output },
+    setup: { input: input({ broker_url: brokerURL, replacement_confirmed: { type: 'boolean' }, replacement_request_id: { type: 'string', minLength: 1, maxLength: 128 }, selection_revision: { type: ['string', 'null'], maxLength: 128 } }, ['broker_url']), output },
     cancel: { input: input(), output },
   },
   events: {},

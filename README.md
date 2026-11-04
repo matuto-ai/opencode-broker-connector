@@ -33,8 +33,31 @@ A deliberate new authorization has new credential-bound addresses; it does not
 adopt the previous authorization's mailbox. Old local data remains intact.
 Ordinary upgrades retain the same authorization, addresses and unread mailbox.
 
+### Request a replacement authorization
+
+Run **`/psst-reauthorize`** in the intended chat, or choose **Psst: Request
+replacement authorization** in the palette. It reuses the configured HTTPS broker
+origin (or asks for one if none exists), displays that target, and asks for native
+confirmation before creating a new request. Approve the displayed public request
+ID in the broker `/admin` page, then use `/psst-status` to distinguish pending,
+approved but not connected, and connected. A pending candidate is resumed, not
+replaced; an approved candidate whose attachment failed is retried intact.
+
+This is deterministic native TUI-to-server dispatch, with no model conversation
+or model/provider tokens required by the connector on supported OpenCode 2.2.5.
+It is not reconnect: reopening the selected conversation reuses saved credentials
+and existing addresses. Reauthorization creates new credential-bound addresses
+only after approval, attachment and safe selection. Old unread data is preserved,
+not replayed into the new identity. Existing access continues only while valid.
+
+**Replacement does not revoke the old credential.** Revocation is a separate
+human action in Psst admin; do not revoke working access first as a prerequisite.
+Cancellation, focus loss or an uncertain response never authorizes another new
+request: return to the original chat, inspect `/psst-status`, then repeat the
+command to reconcile the same candidate. Do not delete private state or locks.
+
 The URL-only `broker_setup` tool remains available for an explicitly requested
-initial setup, but an agent tool cannot confirm replacement. Use the native dialog
+initial setup, but an agent tool cannot confirm replacement. Use `/psst-reauthorize`
 for that decision. See [setup, persistence and acceptance](docs/setup-acceptance.md).
 
 ## Messages
