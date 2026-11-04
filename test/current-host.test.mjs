@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { verifyPackageArtifact } from '../scripts/package-provenance.mjs';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
@@ -24,7 +25,9 @@ for (const approval of [false, true]) test(approval ? 'official OpenCode native 
  t.after(async()=>{const errors=[];for(const cleanup of cleanups.reverse())try{await cleanup();}catch(error){errors.push(error);}if(errors.length)throw new AggregateError(errors,'native_host_cleanup_failed');});
  let containers;const dir=mkdtempSync(join(tmpdir(),'psst-native-host-'));fixtureContext.after(()=>{if(!containers?.retainEvidence())rmSync(dir,{recursive:true,force:true});});
  const packed=spawnSync('npm',['pack','--json','--ignore-scripts','--pack-destination',dir,'--cache',join(dir,'npm-cache')],{encoding:'utf8',cwd:fileURLToPath(new URL('../',import.meta.url))});assert.equal(packed.status,0,packed.stderr);
- const tar=spawnSync('tar',['-xzf',join(dir,JSON.parse(packed.stdout)[0].filename),'-C',dir],{encoding:'utf8'});assert.equal(tar.status,0,tar.stderr);
+ const artifact=JSON.parse(packed.stdout)[0];
+ const tar=spawnSync('tar',['-xzf',join(dir,artifact.filename),'-C',dir],{encoding:'utf8'});assert.equal(tar.status,0,tar.stderr);
+ verifyPackageArtifact({source:fileURLToPath(new URL('../',import.meta.url)),installed:join(dir,'package'),artifact,archive:join(dir,artifact.filename),runtimeDirectories:['plugin','src','vendor']});
  symlinkSync(fileURLToPath(new URL('../node_modules',import.meta.url)),join(dir,'package','node_modules'));
  const key=join(dir,'tls.key');let cert=join(dir,'tls.crt');
  const ssl=spawnSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key,'-out',cert,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=IP:127.0.0.1'],{encoding:'utf8'});assert.equal(ssl.status,0,ssl.stderr);
@@ -88,6 +91,7 @@ tui.stdout.on('data',x=>{tuiOutput=(tuiOutput+x).slice(-16000);});tui.stderr.on(
  async function rpc(method,input={}){const id=++rpcSequence;writeFileSync(rpcFile,JSON.stringify({id,method,input:{sessionID:session.id,...input}}));for(let i=0;i<120;i++){let r;try{r=JSON.parse(readFileSync(rpcResultFile,'utf8'));}catch{}if(r?.id===id){assert.equal(r.error,undefined,'native TUI RPC: '+r.error);return r.result;}await delay(100);}assert.fail('native TUI RPC timed out');}
  if(!authority)await api('/api/session/'+session.id+'/command',{name:'fixture-connect',text:''});
  if(authority){
+   assert.equal((await rpc('status')).connector_version,JSON.parse(readFileSync(join(dir,'package','package.json'))).version,'real host loaded the packed connector version');
    assert.equal((await peer.listClients({})).clients.filter(c=>c.client_type==='opencode').length,0,'startup does not enroll or connect without approval');
    await delay(500);
    const beforeKeyboard=JSON.parse(readFileSync(join(dir,'tui-capabilities.json'),'utf8'));

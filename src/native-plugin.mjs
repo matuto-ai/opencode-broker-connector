@@ -1,3 +1,4 @@
+import packageInfo from '../package.json' with { type: 'json' };
 import { nativeMetadata } from './native-metadata.mjs';
 import { createPresenceReader, presenceDirectory } from './active-presence.mjs';
 import { createHash } from 'node:crypto';
@@ -190,7 +191,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     const expired = state?.settings ? !!state.settings.enrollment && Date.parse(state.settings.enrollment.expiresAt) <= Date.now() : authorizationExpired;
     const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
-    return { host_version: HOST_VERSION, mode: 'native_automatic',
+    return { connector_version: packageInfo.version, host_version: HOST_VERSION, mode: 'native_automatic',
       connected: !!state?.delivery && selected(sessionID) && authorization === 'active',
       availability: selected(sessionID) ? 'selected' : 'inactive', authorization_state: authorization,
       client_id: state?.client?.inbox?.identity?.client_id ?? null,
