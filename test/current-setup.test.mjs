@@ -199,3 +199,54 @@ test('failure reconciliation separates unknown effect, saved request, and foreig
  const foreign = await f.setup.failure(Error('setup_owner_conflict'), 'two'); assert.equal(foreign.state, 'setup_owned_elsewhere');
  assert.doesNotMatch(JSON.stringify([failure, status, foreign]), /private|secret|connectionFile/);
 });
+
+async function selectedFixture(t, overrides = {}) {
+ const { writeFileSync, readFileSync } = await import('node:fs');
+ const f = await fixture(t, overrides);
+ const connectionFile = join(f.directory, 'old-connection.json');
+ writeFileSync(connectionFile, JSON.stringify({ broker: { url: 'https://configured.invalid/', tokenFile: join(f.directory, 'old-token') }, stateDirectory: join(f.directory, 'old-journal') }), { mode: 0o600 });
+ writeFileSync(join(f.directory, 'old-token'), 'unchanged-secret', { mode: 0o600 });
+ writeFileSync(join(f.directory, 'old-journal'), 'unread-messages', { mode: 0o600 });
+ const selectionFile = join(f.directory, 'installation.json');
+ const selectOld = revision => writeFileSync(selectionFile, JSON.stringify({ format: 'psst-opencode-installation-v1', revision, connectionFile }), { mode: 0o600 });
+ selectOld('revision-one');
+ return { ...f, connectionFile, selectOld, readFileSync };
+}
+
+test('status exposes only configured HTTPS origin and selected revision, including expired credentials', async t => {
+ const f = await selectedFixture(t);
+ const result = await f.setup.invoke('broker_setup_status', {}, f.context);
+ assert.equal(result.broker_url, 'https://configured.invalid'); assert.equal(result.selection_revision, 'revision-one');
+ assert.doesNotMatch(JSON.stringify(result), /old-token|unchanged-secret|old-journal|connectionFile/);
+ assert.deepEqual(f.calls, []);
+});
+
+for (const state of ['approved', 'revoked', 'expired']) test(`explicit ${state} replacement preserves old selection and unread data while pending`, async t => {
+ let saved, begins = 0;
+ const f = await selectedFixture(t, { readApprovalState: () => saved,
+  beginApproval: async options => { begins++; assert.equal(options.replaceRequestId, 'old'); return saved = { state: 'pending', requestId: 'new' }; }, pollApproval: async () => saved });
+ saved = { state, requestId: 'old', connectionFile: f.connectionFile };
+ const preflight = await f.setup.invoke('broker_setup_status', {}, f.context);
+ assert.equal(preflight.replacement_confirmation_required, true);
+ await f.setup.invoke('broker_setup', { broker_url: preflight.broker_url }, { ...f.context, confirmedReplacement: true, replacementRequestId: 'old', confirmedSelectionRevision: preflight.selection_revision });
+ assert.equal(begins, 1); assert.equal(readPending(f.directory).requestId, 'new');
+ const { readSelection } = await import('../src/installation.mjs');
+ assert.equal(readSelection(f.directory).connectionFile, f.connectionFile);
+ assert.equal(f.readFileSync(join(f.directory, 'old-token'), 'utf8'), 'unchanged-secret');
+ assert.equal(f.readFileSync(join(f.directory, 'old-journal'), 'utf8'), 'unread-messages');
+});
+
+test('selection revision changed after native confirmation cannot begin replacement', async t => {
+ const f = await selectedFixture(t, { readApprovalState: () => ({ state: 'revoked', requestId: 'old' }) });
+ const preflight = await f.setup.invoke('broker_setup_status', {}, f.context);
+ f.selectOld('revision-two');
+ await assert.rejects(() => f.setup.invoke('broker_setup', { broker_url: preflight.broker_url }, { ...f.context, confirmedReplacement: true, replacementRequestId: 'old', confirmedSelectionRevision: preflight.selection_revision }), /setup_selection_changed/);
+ assert.equal(readPending(f.directory), null); assert.equal(f.calls.includes('begin'), false);
+});
+
+test('model-facing setup cannot smuggle native replacement or selection confirmation', async t => {
+ const f = await fixture(t, { readApprovalState: () => ({ state: 'revoked', requestId: 'old' }) });
+ for (const key of ['replacement_confirmed', 'replacement_request_id', 'selection_revision'])
+  await assert.rejects(() => f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid', [key]: true }, f.context), /invalid_configuration/);
+ assert.equal(f.calls.includes('begin'), false);
+});

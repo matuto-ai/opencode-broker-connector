@@ -212,6 +212,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           sessionID: input.sessionID, signal: rpcContext.signal,
           confirmedReplacement: input.replacement_confirmed === true,
           replacementRequestId: input.replacement_request_id,
+          ...(Object.hasOwn(input, 'selection_revision') ? { confirmedSelectionRevision: input.selection_revision } : {}),
         }); } catch (error) { return setup.failure(error, input.sessionID); }
       };
       registrations.push(await ctx.rpc.register(SETUP_RPC, {
