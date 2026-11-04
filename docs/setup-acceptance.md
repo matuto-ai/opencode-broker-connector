@@ -2,7 +2,7 @@
 
 ## Install, configure, use
 
-The scoped 0.6.0 package is an unreleased source candidate. After publication,
+The scoped 0.7.0 package is an unreleased source candidate. After publication,
 install it using the single native plugin-manager command in the README. The
 same package loads its server and TUI entries; do not install a second wrapper.
 

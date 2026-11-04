@@ -1,10 +1,13 @@
 # Changelog
 
-## 0.6.0 — unreleased source candidate
+## 0.7.0 — unreleased source candidate
 
 Publish the connector under `@matuto-ai/opencode-psst-connector` and rename the GitHub repository to `opencode-psst-connector`. Preserve native identity, saved installation credentials, journals and tool names. The old npm package remains available; migration requires an explicit package-source change. See [migration checklist](docs/migration-0.6.0.md).
 
-## Unreleased
+### Included source changes
+
+- Add explicit native `/psst-reauthorize`, configured-origin reuse and exact-request/selection confirmation; replacement does not revoke the old credential.
+- Preserve setup candidates across focus interruptions, reconcile durable outcomes, and isolate unrelated chats without requiring them to close.
 
 - Add native URL-only setup/status/cancel dialogs, exact-request replacement confirmation, durable owner/status recovery and cancellation/CAS fencing.
 - Attach approved replacement before selecting it while retaining the previous working authorization and private journals; preserve strict identity recovery for expired authorization so setup can repair it.

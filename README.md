@@ -1,6 +1,6 @@
 # Psst for OpenCode
 
-**0.6.0 source candidate — not published yet.**
+**0.7.0 source candidate — not published yet.**
 One npm package, one current native plugin, registered as **`matuto.psst`**.
 The same npm package provides official server and TUI entries. There is no separate installation, Git wrapper or legacy entry.
 
@@ -9,7 +9,7 @@ The same npm package provides official server and TUI entries. There is no separ
 After this version is published:
 
 ```sh
-opencode plugin add @matuto-ai/opencode-psst-connector@0.6.0
+opencode plugin add @matuto-ai/opencode-psst-connector@0.7.0
 ```
 
 For an existing installation, first inspect `opencode plugin list` and remove
@@ -147,7 +147,7 @@ MIT. Vendored Psst code keeps its license and exact integrity pins.
 
 ## Migrating to the Psst package name
 
-Version 0.6.0 uses a new npm package and GitHub repository name. Follow the [migration checklist](docs/migration-0.6.0.md) before publication or upgrading an existing installation. Preserve all private Psst state and do not load both old and new sources.
+Version 0.7.0 uses a new npm package and GitHub repository name. Follow the [migration checklist](docs/migration-0.6.0.md) before publication or upgrading an existing installation. Preserve all private Psst state and do not load both old and new sources.
 
 ### Opt-in registration v2 and retained native conversations
 
