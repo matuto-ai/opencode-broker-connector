@@ -148,3 +148,54 @@ test('selection recovery never automatically retries fatal poll or candidate act
   if(failure==='activation'){await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context));assert.equal(activations,before.activations+1,'only explicit setup retries attachment');}
  }
 });
+
+test('stable owner retry while polling reconciles the same request without another begin', async t => {
+ let saved; const f = await fixture(t, { readApprovalState: () => saved,
+  beginApproval: async () => { f.calls.push('begin'); return saved = { state: 'pending', requestId: 'durable' }; },
+  pollApproval: async () => saved });
+ await f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, f.context);
+ const before = readPending(f.directory);
+ const result = await f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, f.context);
+ assert.equal(result.request_id, 'durable'); assert.equal(result.request_outcome, 'saved');
+ assert.equal(f.calls.filter(x => x === 'begin').length, 1);
+ assert.equal(readPending(f.directory).flowId, before.flowId);
+});
+
+test('paused pending owner cannot be silently moved to another selected conversation', async t => {
+ let saved; const f = await fixture(t, { readApprovalState: () => saved,
+  beginApproval: async () => saved = { state: 'pending', requestId: 'durable' }, pollApproval: async () => saved });
+ await f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, f.context);
+ await f.setup.invoke('broker_cancel_setup', {}, f.context); await delay(0);
+ const second = { ...f.context, sessionID: 'two' };
+ assert.equal((await f.setup.invoke('broker_setup_status', {}, second)).state, 'setup_owned_elsewhere');
+ await assert.rejects(() => f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, second), /owner_conflict/);
+ assert.equal(readPending(f.directory).owner.sessionID, 'one');
+ assert.equal(readPending(f.directory).requestId, 'durable');
+});
+
+test('cancelled begin retains receipt, status reconciles disk, and explicit retry reuses identity', async t => {
+ let saved, release, begins = 0;
+ const f = await fixture(t, { readApprovalState: () => saved,
+  beginApproval: async () => { begins++; saved ??= { state: 'pending', requestId: 'durable' }; if (begins === 1) await new Promise(r => { release = r; }); return saved; },
+  pollApproval: async () => saved });
+ const caller = new AbortController();
+ const action = f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, { ...f.context, signal: caller.signal });
+ while (!release) await delay(0); caller.abort(); release();
+ assert.equal((await action).request_outcome, 'saved');
+ const status = await f.setup.invoke('broker_setup_status', {}, f.context);
+ assert.equal(status.state, 'paused'); assert.equal(status.request_id, 'durable'); assert.equal(status.request_outcome, 'saved');
+ const result = await f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, f.context);
+ assert.equal(result.request_id, 'durable'); assert.equal(readPending(f.directory).owner.sessionID, 'one');
+});
+
+test('failure reconciliation separates unknown effect, saved request, and foreign owner without secrets', async t => {
+ let saved; const f = await fixture(t, { readApprovalState: () => saved,
+  beginApproval: async () => { saved = { state: 'pending', requestId: 'durable', connectionFile: '/private/token' }; throw Object.assign(Error('/private/secret'), { effect: 'unknown' }); } });
+ const before = await f.setup.invoke('broker_setup_status', {}, f.context); assert.equal(before.request_outcome, 'not_started');
+ await assert.rejects(() => f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid' }, f.context));
+ const failure = await f.setup.failure({ effect: 'unknown' }, 'one');
+ assert.equal(failure.request_outcome, 'unknown'); assert.equal(failure.request_id, 'durable');
+ const status = await f.setup.invoke('broker_setup_status', {}, f.context); assert.equal(status.request_outcome, 'saved');
+ const foreign = await f.setup.failure(Error('setup_owner_conflict'), 'two'); assert.equal(foreign.state, 'setup_owned_elsewhere');
+ assert.doesNotMatch(JSON.stringify([failure, status, foreign]), /private|secret|connectionFile/);
+});

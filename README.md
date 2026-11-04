@@ -156,3 +156,5 @@ connector intentionally continues exposing its existing eight tools, not those t
 new tools; unknown future SDK catalog changes still fail closed.
 
 Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
+
+For interrupted URL setup or multiple open chats, see [setup context and focus recovery](docs/setup-context-recovery.md). Keep unrelated chats open; return to the original chat and reconcile its saved request with `/psst-status`.
