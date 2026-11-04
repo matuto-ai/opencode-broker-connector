@@ -12,7 +12,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "zod": "4.1.8"
+    "zod": "4.6.6"
   },
   "description": "Native automatic Psst messaging for OpenCode",
   "main": "./plugin/index.mjs",
