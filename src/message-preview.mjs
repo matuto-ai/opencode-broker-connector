@@ -2,7 +2,7 @@ import { validateEnvelope } from '../vendor/broker/src/protocol.mjs';
 
 export const PREVIEW_TEXT_LIMIT = 160;
 export const PREVIEW_SENDER_LIMIT = 40;
-// This is a presentation-only preview, not a replacement for the full compact-v1
+// This is a presentation-only preview, not a replacement for the full versioned
 // body. Persist it with each new admission; never recompute a stored payload.
 const unsafe = /[\u0000-\u001f\u007f-\u009f\u2028\u2029\u200b\u2060\ufeff]|\p{Bidi_Control}/u;
 function literal(value, limit) {

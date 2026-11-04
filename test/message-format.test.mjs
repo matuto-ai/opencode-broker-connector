@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { nativeMessage, NATIVE_FORMAT } from '../src/message-format.mjs';
+import { nativeMessage as renderNativeMessage, NATIVE_FORMAT } from '../src/message-format.mjs';
 import { provenance } from '../vendor/broker/reference/runtime.mjs';
 
+const nativeMessage = (envelope, format = 'compact-v1') => renderNativeMessage(envelope, format);
 function envelope(text = 'hello') {
   return {protocol_version:'1',message_id:randomUUID(),recipient_id:randomUUID(),recipient_sequence:1,
     sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
@@ -12,7 +13,7 @@ function envelope(text = 'hello') {
 }
 test('compact-v1 retains origin, exact sender/message IDs and text, not display-only boilerplate',()=>{
   const e=envelope(),before=structuredClone(e),shown=nativeMessage(e);
-  assert.equal(NATIVE_FORMAT,'compact-v1');
+  assert.equal(NATIVE_FORMAT,'compact-v2');
   const [heading,data,...extra]=shown.split('\n');
   assert.equal(heading,`Broker message from AI agent ${e.sender.client_id}`);
   assert.deepEqual(JSON.parse(data),{message_id:e.message_id,sender:{name:'peer',client_type:'pi'},text:'hello'});assert.deepEqual(extra,[]);

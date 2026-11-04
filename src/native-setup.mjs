@@ -5,6 +5,7 @@ import { withNativeLock } from './native-lock.mjs';
 import { createToolScope } from './tool-scope.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readConfig } from './config.mjs';
+import { DIRECT_COMMAND_GUIDANCE } from './collaboration-guidance.mjs';
 
 const publicState = value => ({ state: value?.state ?? 'setup_needed',
   ...(value?.requestId ? { request_id: value.requestId } : {}),
@@ -17,7 +18,7 @@ export const SETUP_TOOLS = [
     input: { type: 'object', properties: {}, required: [], additionalProperties: false } },
   { name: 'broker_cancel_setup', description: 'Pause this session\'s local pending Psst setup. Preserves the prior authorization and durable request; does not revoke credentials.',
     input: { type: 'object', properties: {}, required: [], additionalProperties: false } },
-];
+].map(definition => ({ ...definition, description: `${definition.description} ${DIRECT_COMMAND_GUIDANCE}` }));
 
 /** One explicit URL flow per installation. Recovery is read/GET-only. The private
  * pending record retains the exact native owner across plugin namespace reloads.

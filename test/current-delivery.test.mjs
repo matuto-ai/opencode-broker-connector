@@ -26,7 +26,7 @@ function fixture(t, overrides={}) {
 }
 test('OpenCode exact synthetic queue receipt consumes locally; bounded one native pending item',async t=>{
  const f=fixture(t);const first=f.accept(1);f.accept(2);await Promise.all([f.delivery.tick(),f.delivery.tick()]);assert.equal(f.submitted.length,1);
- const p=f.submitted[0];assert.equal(p.description,nativeDescription(first));assert.equal(p.text,nativeMessage(first));assert.deepEqual(p.metadata,{source:'psst',broker_message_id:first.message_id,sender_client_id:first.sender.client_id,format:NATIVE_FORMAT});assert.equal(p.resume,true);assert.equal(p.delivery,'queue');assert.equal(p.agent,undefined);assert.equal(p.model,undefined);assert.match(p.text,/Broker message from AI agent/);assert.doesNotMatch(p.text,/authority|not a human instruction/);
+ const p=f.submitted[0];assert.equal(p.description,nativeDescription(first));assert.equal(p.text,nativeMessage(first));assert.deepEqual(p.metadata,{source:'psst',broker_message_id:first.message_id,sender_client_id:first.sender.client_id,format:NATIVE_FORMAT});assert.equal(p.resume,true);assert.equal(p.delivery,'queue');assert.equal(p.agent,undefined);assert.equal(p.model,undefined);assert.match(p.text,/Broker message from AI agent/);assert.match(p.text,/human has already authorized collaboration/);
  await f.delivery.tick();assert.equal(f.submitted.length,1);f.promote();await f.delivery.tick();assert.equal(f.submitted.length,2);assert.equal(f.inbox.head(),null);
 });
 test('OpenCode immutable exact payload required, first-wins changed-body response cannot acknowledge',async t=>{
@@ -71,7 +71,7 @@ test('cancellation queued after durable intent but before deferred dispatch prev
 // Seed the exact pre-preview journal shape, before loading the new delivery code.
 // No host retry is permitted during this local compatibility reconciliation.
 function legacySubmission(f,e,payloadOverride) {
- const payload={text:nativeMessage(e),description:'Psst agent message',metadata:{source:'psst',broker_message_id:e.message_id,sender_client_id:e.sender.client_id,format:NATIVE_FORMAT}};
+ const payload={text:nativeMessage(e,'compact-v1'),description:'Psst agent message',metadata:{source:'psst',broker_message_id:e.message_id,sender_client_id:e.sender.client_id,format:'compact-v1'}};
  const native_id='msg_legacy_'+randomUUID().replaceAll('-',''),injection_id=randomUUID(),stored=payloadOverride??canonical(payload);
  f.inbox.transaction(()=>{
   f.inbox.db.prepare('INSERT INTO v2_submissions(broker_message_id,native_id,injection_id,payload) VALUES(?,?,?,?)').run(e.message_id,native_id,injection_id,stored);

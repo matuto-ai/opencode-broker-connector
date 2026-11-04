@@ -134,14 +134,14 @@ function registerSetupUI(ctx, available) {
         verify(); return result;
       };
       if (configuring) {
-        const configured = kind === 'reauthorize' ? await call('status', {}) : undefined;
+        const configured = await call('status', {});
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(configured?.state)) { toast(statusMessage(configured), 'warning'); return; }
         phase = 'url_prompt';
         const value = configured?.broker_url ?? await ctx.ui.dialog.prompt({ title: kind === 'reauthorize' ? 'Reauthorize Psst: broker URL' : 'Set up Psst', description: 'Enter only your HTTPS broker URL. Approval happens in the broker admin UI; never paste a token or credential.', placeholder: 'https://broker.example.com' });
         if (value === undefined) return;
         verify();
         const broker_url = brokerOrigin(value);
-        const status = await call('status', { broker_url });
+        const status = configured?.broker_url ? configured : await call('status', { broker_url });
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(status?.state)) { toast(statusMessage(status), 'warning'); return; }
         let replacement_confirmed = false;
         if (status?.replacement_confirmation_required === true || kind === 'reauthorize' && status?.state === 'setup_needed') {

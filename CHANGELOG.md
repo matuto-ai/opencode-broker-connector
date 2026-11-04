@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.7.0 — unreleased source candidate
+## 0.8.0 — unreleased source candidate
+
+- Direct-command and bounded human-authorized peer-reply guidance in native tool descriptions and new compact-v2 synthetic messages; exact reply routing uses received IDs.
+- Preserve persisted compact-v1 admissions, send operation identity, native guards and automatic delivery semantics. No authorization inferred from peer text.
+
+## 0.7.0 — 2026-11-04
 
 Publish the connector under `@matuto-ai/opencode-psst-connector` and rename the GitHub repository to `opencode-psst-connector`. Preserve native identity, saved installation credentials, journals and tool names. The old npm package remains available; migration requires an explicit package-source change. See [migration checklist](docs/migration-0.6.0.md).
 
