@@ -69,7 +69,7 @@ function displayJSON(value) {
  * are insufficient lifetime proof. No automatic plugin attachment is implied.
  */
 export function createOpenCodeAdapter({ reference, tool, binding, currentBinding,
-  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, operationContext = null, closeSessionOnStop = true }) {
+  client, inbox = client?.inbox, observeMetadata = null, onDiagnostic = () => {}, onHealthChange = () => {}, operationContext = null, closeSessionOnStop = true }) {
   if (!reference || typeof reference.AdapterRuntime !== 'function' || typeof reference.createTools !== 'function'
     || typeof reference.invokeTool !== 'function' || typeof reference.safeError !== 'function'
     || typeof reference.LocalError !== 'function' || !Array.isArray(reference.TOOL_DEFINITIONS)
@@ -123,7 +123,7 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
   }
   const runtime = new NativeRuntime({ client, inbox,
     verifySession: async candidate => sameIdentity(candidate) && await alive(), isAlive: alive,
-    onDiagnostic: entry => diagnostic(entry.code) });
+    onDiagnostic: entry => diagnostic(entry.code), onHealthChange });
   async function stop() {
     if (stopPromise) return stopPromise;
     closed = true; started = false; recoveryAbort.abort();
@@ -186,6 +186,8 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
         try {
           if (!started || !context) throw new reference.LocalError('session_mismatch');
           await assertBound(context);
+          const transport = runtime.status();
+          if (transport.recovery === 'blocked') throw new reference.LocalError(transport.error_code, { effect: 'unknown' });
           const parsed = validator.safeParse(arguments_);
           if (!parsed.success) throw new reference.LocalError('invalid_configuration', { field: 'arguments' });
           // Per-invocation closure, never a mutable global current tool context.
@@ -220,5 +222,5 @@ export function createOpenCodeAdapter({ reference, tool, binding, currentBinding
       },
     })];
   }));
-  return Object.freeze({ tools, start, stop, localMode: 'native_automatic' });
+  return Object.freeze({ tools, start, stop, status: () => runtime.status(), localMode: 'native_automatic' });
 }

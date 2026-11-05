@@ -511,7 +511,7 @@ test('native status refreshes public metadata and reports pending messages and a
  const disconnected=await f.rpc().status(input,context);assert.equal(disconnected.disconnected,true);assert.equal(disconnected.pending_count,null);assert.equal(disconnected.delivery_paused,null);
 });
 
-test('confirmed session expiry replaces the connector journal once before starting delivery', async t => {
+test('confirmed session expiry retains the same journal and blocks automatic mailbox replacement', async t => {
   const f = await fixture(t);
   await f.runtime.dispose();
   f.settings.broker.registrationVersion = 2;
@@ -532,29 +532,30 @@ test('confirmed session expiry replaces the connector journal once before starti
     adapterFactory: args => {
       const adapter = f.options.adapterFactory(args);
       return { ...adapter, start: async () => {
-        if (++attempts === 1) throw Object.assign(new Error('expired'), { code: 'session_expired' });
-        await adapter.start();
+        attempts++;
+        throw Object.assign(new Error('expired'), { code: 'session_expired' });
       } };
     },
     deliveryFactory: () => ({ start() { deliveries++; }, async stop() {}, event() {} }),
   };
   const runtime = await setupNativePlugin(options);
   t.after(() => runtime.dispose());
-  await runtime.connect('one');
-  assert.equal(attempts, 2);
-  assert.equal(allocations, 1);
-  assert.equal(deliveries, 1);
-  assert.notEqual(clients[0].identity.client_id, clients[1].identity.client_id);
-  const identity = runtime.status('one').client_id;
+  await assert.rejects(runtime.connect('one'), { code: 'session_expired' });
+  await assert.rejects(runtime.connect('one'), /native_plugin_closed/);
+  assert.equal(attempts, 1);
+  assert.equal(allocations, 0);
+  assert.equal(deliveries, 0);
+  assert.equal(runtime.status('one').transport.error_code, 'session_expired');
+  const identity = clients[0].identity.client_id;
   await runtime.dispose();
   const reloaded = await setupNativePlugin(options);
   t.after(() => reloaded.dispose());
-  await reloaded.connect('one');
-  assert.equal(reloaded.status('one').client_id, identity);
-  assert.equal(allocations, 1);
+  await assert.rejects(reloaded.connect('one'), /native_plugin_closed/);
+  assert.equal(clients.at(-1).identity.client_id, identity);
+  assert.equal(allocations, 0);
 });
 
-test('uncertain replacement blocks reconnect in the same plugin instead of allocating repeatedly', async t => {
+test('confirmed expiry cannot trigger replacement allocation even when replacement storage would fail', async t => {
   const f = await fixture(t);
   await f.runtime.dispose();
   f.settings.broker.registrationVersion = 2;
@@ -567,9 +568,9 @@ test('uncertain replacement blocks reconnect in the same plugin instead of alloc
       async start() { throw Object.assign(new Error('expired'), { code: 'session_expired' }); } }),
   });
   t.after(() => runtime.dispose());
-  await assert.rejects(runtime.connect('one'), { code: 'native_incarnation_uncertain' });
+  await assert.rejects(runtime.connect('one'), { code: 'session_expired' });
   await assert.rejects(runtime.connect('one'), /native_plugin_closed/);
-  assert.equal(allocations, 1);
+  assert.equal(allocations, 0);
   assert.equal(runtime.status('one').connected, false);
 });
 
