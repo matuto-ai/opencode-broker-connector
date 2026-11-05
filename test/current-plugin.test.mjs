@@ -35,7 +35,7 @@ test('native reauthorization RPC checks endpoint without granting model replacem
  const {SETUP_RPC}=await import('../src/setup-rpc.mjs');
  const f=await fixture(t);await f.runtime.dispose();
  const directory=f.options.setupOptions.directory,connectionFile=candidateFile(f,'old');
- mkdirSync(directory,{mode:0o700});
+ mkdirSync(directory,{mode:0o700,recursive:true});
  writeFileSync(join(directory,'installation.json'),JSON.stringify({format:'psst-opencode-installation-v1',revision:'old-revision',connectionFile}),{mode:0o600});
  const oldSelection=readFileSync(join(directory,'installation.json'));
  let handlers,begins=0,saved={state:'revoked',requestId:'old'};
