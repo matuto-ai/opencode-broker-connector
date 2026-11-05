@@ -228,7 +228,7 @@ for (const state of ['approved', 'revoked', 'expired']) test(`explicit ${state} 
  saved = { state, requestId: 'old', connectionFile: f.connectionFile };
  const preflight = await f.setup.invoke('broker_setup_status', {}, f.context);
  assert.equal(preflight.replacement_confirmation_required, true);
- await f.setup.invoke('broker_setup', { broker_url: preflight.broker_url }, { ...f.context, confirmedReplacement: true, replacementRequestId: 'old', confirmedSelectionRevision: preflight.selection_revision });
+ await f.setup.invoke('broker_setup', { broker_url: preflight.broker_url }, { ...f.context, reauthorize: true, confirmedReplacement: true, replacementRequestId: 'old', confirmedSelectionRevision: preflight.selection_revision });
  assert.equal(begins, 1); assert.equal(readPending(f.directory).requestId, 'new');
  const { readSelection } = await import('../src/installation.mjs');
  assert.equal(readSelection(f.directory).connectionFile, f.connectionFile);
@@ -244,9 +244,46 @@ test('selection revision changed after native confirmation cannot begin replacem
  assert.equal(readPending(f.directory), null); assert.equal(f.calls.includes('begin'), false);
 });
 
-test('model-facing setup cannot smuggle native replacement or selection confirmation', async t => {
+test('native reauthorization rejects a different selected broker before helper or state mutation', async t => {
+ const f = await selectedFixture(t, { readApprovalState: () => assert.fail('Mismatch must precede helper access') });
+ const files = ['installation.json', 'old-connection.json', 'old-token', 'old-journal'];
+ const before = files.map(file => f.readFileSync(join(f.directory,file)));
+ let failure;
+ try { await f.setup.invoke('broker_setup', { broker_url: 'https://different.invalid' }, { ...f.context, reauthorize: true, confirmedReplacement: true, replacementRequestId: 'old' }); }
+ catch(error) { failure = error; }
+ assert.equal(failure?.message, 'broker_endpoint_mismatch');
+ assert.equal((await f.setup.failure(failure,f.context.sessionID)).code, 'broker_endpoint_mismatch');
+ assert.deepEqual(files.map(file => f.readFileSync(join(f.directory,file))),before);
+ assert.equal(readPending(f.directory),null);assert.equal(f.stored.size,0);assert.deepEqual(f.calls,[]);
+});
+
+for(const paused of [false,true]) test(`native endpoint mismatch preserves ${paused?'paused':'active'} pending request`, async t => {
+ const {readFileSync} = await import('node:fs');
+ const f = await fixture(t);
+ await f.setup.invoke('broker_setup',{broker_url:'https://fixture.invalid'},f.context);
+ if(paused)await f.setup.invoke('broker_cancel_setup',{},f.context);
+ const before = readFileSync(join(f.directory,'pending.json'));
+ const begins = f.calls.filter(call => call==='begin').length;
+ await assert.rejects(() => f.setup.invoke('broker_setup',{broker_url:'https://different.invalid'},{...f.context,reauthorize:true}),/broker_endpoint_mismatch/);
+ assert.deepEqual(readFileSync(join(f.directory,'pending.json')),before);
+ assert.equal(f.calls.filter(call => call==='begin').length,begins);
+});
+
+test('native reauthorization rechecks configured target after asynchronous helper loading', async t => {
+ const {writeFileSync} = await import('node:fs');
+ const f = await selectedFixture(t);await f.setup.stop();
+ const setup = createNativeSetup({...f.options,loadHelper:async()=>{
+  const value=JSON.parse(f.readFileSync(f.connectionFile,'utf8'));
+  value.broker.url='https://changed.invalid/';writeFileSync(f.connectionFile,JSON.stringify(value),{mode:0o600});
+  return f.options.loadHelper();
+ }});t.after(()=>setup.stop());
+ await assert.rejects(()=>setup.invoke('broker_setup',{broker_url:'https://configured.invalid'},{...f.context,reauthorize:true}),/broker_endpoint_mismatch/);
+ assert.equal(readPending(f.directory),null);assert.equal(f.stored.size,0);assert.deepEqual(f.calls,[]);
+});
+
+test('model-facing setup cannot smuggle native reauthorization, replacement or selection confirmation', async t => {
  const f = await fixture(t, { readApprovalState: () => ({ state: 'revoked', requestId: 'old' }) });
- for (const key of ['replacement_confirmed', 'replacement_request_id', 'selection_revision'])
+ for (const key of ['replacement_confirmed', 'replacement_request_id', 'selection_revision', 'reauthorize'])
   await assert.rejects(() => f.setup.invoke('broker_setup', { broker_url: 'https://fixture.invalid', [key]: true }, f.context), /invalid_configuration/);
  assert.equal(f.calls.includes('begin'), false);
 });

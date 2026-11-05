@@ -29,6 +29,38 @@ test('OpenCode registers automatic-only lifecycle tools, preserves drafts and is
  const f=await fixture(t);assert.equal(f.tools.size,8);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
  const prompt={sessionID:'one',messageID:'human',prompt:{text:'keep my draft'}};await f.hooks.get('prompt')(prompt);await f.runtime.connect('one');await f.runtime.connect('two');assert.equal(f.states.length,2);assert.notEqual(f.states[0].identity.client_id,f.states[1].identity.client_id);assert.equal(prompt.prompt.text,'keep my draft');
 });
+test('native reauthorization RPC checks endpoint without granting model replacement authority',async t=>{
+ const {mkdirSync,readFileSync}=await import('node:fs');
+ const {readPending,readSelection}=await import('../src/installation.mjs');
+ const {SETUP_RPC}=await import('../src/setup-rpc.mjs');
+ const f=await fixture(t);await f.runtime.dispose();
+ const directory=f.options.setupOptions.directory,connectionFile=candidateFile(f,'old');
+ mkdirSync(directory,{mode:0o700});
+ writeFileSync(join(directory,'installation.json'),JSON.stringify({format:'psst-opencode-installation-v1',revision:'old-revision',connectionFile}),{mode:0o600});
+ const oldSelection=readFileSync(join(directory,'installation.json'));
+ let handlers,begins=0,saved={state:'revoked',requestId:'old'};
+ f.ctx.rpc={register:async(definition,methods)=>{assert.equal(definition,SETUP_RPC);handlers=methods;return{dispose:async()=>{}};}};
+ const runtime=await setupNativePlugin({...f.options,setupEnabled:true,presenceFactory:()=>({selected:()=>new Set(['one'])}),setupOptions:{directory,
+  loadHelper:async()=>({readApprovalState:()=>saved,beginApproval:async options=>{begins++;assert.equal(options.brokerUrl,'https://fixture.invalid/');assert.equal(options.replaceRequestId,'old');return saved={state:'pending',requestId:'new'};},pollApproval:async()=>saved})
+ }});t.after(()=>runtime.dispose());
+ const context={signal:new AbortController().signal};
+ const input={sessionID:'one',broker_url:'https://different.invalid',reauthorize:true,replacement_confirmed:true,replacement_request_id:'old',selection_revision:'old-revision'};
+ const mismatch=await handlers.setup(input,context);
+ assert.equal(mismatch.code,'broker_endpoint_mismatch');assert.equal(begins,0);assert.equal(readPending(directory),null);
+ assert.deepEqual(readFileSync(join(directory,'installation.json')),oldSelection);
+ await assert.rejects(()=>handlers.setup({...input,sessionID:'foreign'},context),/native_session_not_selected/);
+ const matching={...input,broker_url:'https://fixture.invalid'};
+ const unconfirmed=await handlers.setup({...matching,replacement_confirmed:false},context);
+ assert.equal(unconfirmed.replacement_confirmation_required,true);assert.equal(begins,0);
+ const model=await f.tools.get('broker_setup').execute({broker_url:matching.broker_url,reauthorize:true},{sessionID:'one',signal:context.signal});
+ assert.equal(JSON.parse(model.content).state,'setup_blocked');assert.equal(begins,0);
+ assert.equal((await handlers.setup(matching,context)).request_id,'new');
+ assert.equal((await handlers.setup(matching,context)).request_id,'new');assert.equal(begins,1);
+ await handlers.cancel({sessionID:'one'},context);assert.equal(readPending(directory).paused,true);
+ assert.equal(readSelection(directory).connectionFile,connectionFile);
+ assert.deepEqual(readFileSync(join(directory,'installation.json')),oldSelection);
+});
+
 test('OpenCode durable native tool-call ID is private and replay stable, distinct calls are distinct',async t=>{
  const f=await fixture(t),invoke=async id=>JSON.parse((await f.tools.get('broker_send').execute({}, {sessionID:'one',messageID:'msg',id,signal:new AbortController().signal})).content);
  const a=await invoke('call1'),b=await invoke('call1'),c=await invoke('call2');assert.equal(a.operation.operationId,b.operation.operationId);assert.notEqual(a.operation.operationId,c.operation.operationId);

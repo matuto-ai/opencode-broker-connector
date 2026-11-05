@@ -210,6 +210,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         try { return await setup.invoke(name, name === 'broker_setup' ? { broker_url: input.broker_url }
           : name === 'broker_setup_status' && input.broker_url ? { broker_url: input.broker_url } : {}, {
           sessionID: input.sessionID, signal: rpcContext.signal,
+          reauthorize: input.reauthorize === true,
           confirmedReplacement: input.replacement_confirmed === true,
           replacementRequestId: input.replacement_request_id,
           ...(Object.hasOwn(input, 'selection_revision') ? { confirmedSelectionRevision: input.selection_revision } : {}),

@@ -33,7 +33,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
   const stop = tui.setup(ctx);
   t.after(() => { stop(); if (sharedRoot) return; if (prior === undefined) delete process.env.PSST_OPENCODE_CONFIG_DIR; else process.env.PSST_OPENCODE_CONFIG_DIR = prior; if (!sharedRoot) rmSync(root, { recursive: true, force: true }); });
   return { ctx, commands, calls, prompts, confirmations, toasts, renderer, stop,
-    route(value) { route = value; renderer.emit('frame'); }, run: id => commands.find(x => x.id === id).run() };
+    route(value) { route = value; renderer.emit('frame'); }, run: (id, input) => commands.find(x => x.id === id).run(input) };
 }
 test('official native palette/slash commands use one URL and selected-session RPC', async t => {
   const f = fixture(t);
@@ -106,7 +106,7 @@ test('shared local presence guard must pass before dialog or RPC', async t => {
   await f.run('psst-setup'); assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 0);
 });
 test('portable RPC schemas accept only native session, URL, and explicit replacement fence', () => {
-  assert.deepEqual(Object.keys(SETUP_RPC.methods.setup.input.properties), ['sessionID', 'broker_url', 'replacement_confirmed', 'replacement_request_id', 'selection_revision']);
+  assert.deepEqual(Object.keys(SETUP_RPC.methods.setup.input.properties), ['sessionID', 'broker_url', 'reauthorize', 'replacement_confirmed', 'replacement_request_id', 'selection_revision']);
   for (const method of Object.values(SETUP_RPC.methods)) assert.equal(method.input.additionalProperties, false);
 });
 test('focus change during preflight aborts RPC and never begins setup', async t => {
@@ -207,23 +207,23 @@ test('setup owned elsewhere stops at preflight, without replaying confirmation',
   assert.match(f.toasts.at(-1).message, /belongs to another chat/);
 });
 
-test('reauthorize dispatches directly, reuses configured origin, and confirms exact target and revision', async t => {
+test('reauthorize dispatches the explicit matching origin and confirms exact target and revision', async t => {
   const f = fixture(t, { result: { status: { broker_url: 'https://broker.example.com', state: 'approved', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'revision-one' },
     setup: { state: 'pending', request_id: 'new', approval_url: 'https://broker.example.com/admin', connected: true } } });
-  await f.run('psst-reauthorize');
+  await f.run('psst-reauthorize', 'https://broker.example.com/');
   assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 1);
   assert.match(f.confirmations[0].message, /Broker: https:\/\/broker.example.com/);
   assert.match(f.confirmations[0].message, /after approval and safe attachment/);
   assert.match(f.confirmations[0].message, /does not revoke the old credential/);
   assert.deepEqual(f.calls.map(c => c.name), ['status', 'setup']);
-  assert.deepEqual(f.calls.at(-1).input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', selection_revision: 'revision-one', replacement_confirmed: true, replacement_request_id: 'old' });
+  assert.deepEqual(f.calls.at(-1).input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', reauthorize: true, selection_revision: 'revision-one', replacement_confirmed: true, replacement_request_id: 'old' });
   assert.match(f.toasts.at(-1).message, /new/); assert.match(f.toasts.at(-1).message, /https:\/\/broker.example.com\/admin/);
 });
 
 for (const state of ['pending', 'paused', 'approved']) test(`reauthorize reconciles ${state} candidate without replacing it`, async t => {
   const f = fixture(t, { result: { status: { broker_url: 'https://broker.example.com', state, request_id: 'same', replacement_confirmation_required: false, selection_revision: null },
     setup: { state, request_id: 'same', request_outcome: 'saved', connected: false } } });
-  await f.run('psst-reauthorize');
+  await f.run('psst-reauthorize', 'https://broker.example.com');
   assert.equal(f.confirmations.length, 0); assert.equal(f.prompts.length, 0);
   assert.equal(f.calls.at(-1).input.replacement_confirmed, undefined);
   assert.match(f.toasts.at(-1).message, /same/);
@@ -233,7 +233,7 @@ for (const state of ['pending', 'paused', 'approved']) test(`reauthorize reconci
 for (const change of ['cancel', 'blur', 'session', 'location']) test(`reauthorization confirmation rejects ${change} without setup`, async t => {
   let release;
   const f = fixture(t, { confirm: () => new Promise(resolve => { release = resolve; }), result: { status: { broker_url: 'https://broker.example.com', state: 'revoked', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'rev' } } });
-  const action = f.run('psst-reauthorize'); while (!release) await new Promise(resolve => setImmediate(resolve));
+  const action = f.run('psst-reauthorize', 'https://broker.example.com'); while (!release) await new Promise(resolve => setImmediate(resolve));
   if (change === 'blur') f.renderer.emit('blur');
   if (change === 'session') f.route({ type: 'session', sessionID: 'other' });
   if (change === 'location') { f.ctx.location = { directory: '/another-location' }; f.renderer.emit('frame'); }
@@ -241,10 +241,37 @@ for (const change of ['cancel', 'blur', 'session', 'location']) test(`reauthoriz
   assert.equal(f.calls.filter(c => c.name === 'setup').length, 0);
 });
 
-test('reauthorize without saved origin prompts once and confirms before initial candidate', async t => {
+test('reauthorize without saved origin uses its explicit endpoint and retains confirmation', async t => {
   const f = fixture(t, { result: { status: { state: 'setup_needed', selection_revision: null } } });
-  await f.run('psst-reauthorize'); assert.equal(f.prompts.length, 1); assert.equal(f.confirmations.length, 1);
+  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 1);
   assert.equal(f.calls.at(-1).name, 'setup'); assert.equal(f.calls.at(-1).input.selection_revision, null);
+});
+
+for (const endpoint of [undefined, '', ' ', 'http://broker.example.com', 'https:broker.example.com', 'https:///broker.example.com', 'https://broker.example.com\\path', 'https://broker.example.com/path', 'https://broker.example.com/../', 'https://user:secret@broker.example.com', 'https://broker.example.com?token=secret', 'https://broker.example.com?', 'https://broker.example.com#', 'https://broker.example.com\u0085', 'https://broker.example.com\n', 'https://broker.example.com https://other.example.com']) test(`reauthorize rejects missing/malformed endpoint before RPC: ${JSON.stringify(endpoint)}`, async t => {
+  const f = fixture(t, { result: { status: { broker_url: 'https://broker.example.com', state: 'approved' } } });
+  f.ctx.client.rpc = () => assert.fail('Invalid invocation must not inspect setup status');
+  await f.run('psst-reauthorize', endpoint);
+  assert.equal(f.calls.length, 0); assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+  assert.match(f.toasts.at(-1).message, /Usage: \/psst-reauthorize <https:\/\/broker.example.com>/);
+  assert.doesNotMatch(JSON.stringify(f.toasts), /secret|other.example.com|\u0085/);
+});
+
+for (const state of ['pending', 'paused', 'approved']) test(`reauthorize rejects configured-target mismatch for ${state} without setup`, async t => {
+  const f = fixture(t, { result: { status: { broker_url: 'https://configured.example.com', state } } });
+  await f.run('psst-reauthorize', 'https://different.example.com');
+  assert.deepEqual(f.calls.map(call => call.name), ['status']);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+  assert.match(f.toasts.at(-1).message, /does not match the configured broker/);
+});
+
+test('reauthorize advertises native argument support and reports server-side target drift', async t => {
+  const f = fixture(t, { result: { status: { broker_url: 'https://broker.example.com', state: 'pending' }, setup: { state: 'setup_blocked', code: 'broker_endpoint_mismatch' } } });
+  const command = f.commands.find(command => command.id === 'psst-reauthorize');
+  assert.equal(command.slash.arguments, true);
+  await command.run(); assert.match(f.toasts.at(-1).message, /Usage:/); assert.equal(f.calls.length, 0);
+  await command.run('https://broker.example.com');
+  assert.equal(f.calls.at(-1).input.reauthorize, true);
+  assert.match(f.toasts.at(-1).message, /does not match the configured broker/);
 });
 
 test('selected but not connected candidate is not reported as working access', async t => {
@@ -260,8 +287,8 @@ test('reauthorize reconciles a lost replacement response without replaying confi
     if (++attempts === 1) throw Error('reply_lost');
     return { ...state, request_outcome: 'saved' };
   } } });
-  await f.run('psst-reauthorize'); assert.match(f.toasts.at(-1).message, /request=unknown/);
-  await f.run('psst-reauthorize'); assert.equal(f.confirmations.length, 1);
+  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.match(f.toasts.at(-1).message, /request=unknown/);
+  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.confirmations.length, 1);
   assert.equal(f.calls.at(-1).input.replacement_confirmed, undefined);
   assert.match(f.toasts.at(-1).message, /same-candidate/);
 });
