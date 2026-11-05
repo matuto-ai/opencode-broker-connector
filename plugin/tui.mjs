@@ -78,6 +78,7 @@ function statusMessage(result) {
   if (typeof result?.request_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(result.request_id)) message += ` Request: ${result.request_id}.`;
   if (result?.request_outcome === 'unknown') message += ' The request outcome is unknown. Check /psst-status in the original chat before retrying; the saved request must be reconciled.';
   else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
+  if (result?.disconnected === true) message = 'Psst is disconnected for this chat. Polling, heartbeat and automatic delivery are stopped. Use /psst-connect to reuse saved authorization. Local data is retained.';
   return message;
 }
 function registerSetupUI(ctx, available) {
@@ -99,7 +100,8 @@ function registerSetupUI(ctx, available) {
       try { endpoint = brokerOrigin(input); }
       catch { toast('Usage: /psst-reauthorize <https://broker.example.com> — supply the broker HTTPS origin explicitly, without credentials, path, query or fragment. No setup request was submitted.', 'warning'); return; }
     }
-    if (active) { toast('Finish or dismiss the current Psst dialog first.', 'warning'); return; }
+    if (active && kind === 'disconnect') active.abort();
+    else if (active) { toast('Finish or dismiss the current Psst dialog first.', 'warning'); return; }
     const controller = new AbortController();
     const configuring = kind === 'setup' || kind === 'reauthorize';
     active = controller;
@@ -142,6 +144,7 @@ function registerSetupUI(ctx, available) {
       };
       if (configuring) {
         const configured = await call('status', {});
+        if (configured?.disconnected === true) { toast(statusMessage(configured)); return; }
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(configured?.state)) { toast(statusMessage(configured), 'warning'); return; }
         if (endpoint && configured?.broker_url && brokerOrigin(configured.broker_url) !== endpoint) { toast(ENDPOINT_MISMATCH, 'warning'); return; }
         phase = 'url_prompt';
@@ -191,6 +194,8 @@ function registerSetupUI(ctx, available) {
   ctx.keymap.layer(() => ({ mode: 'global', commands: [
     { id: 'psst-setup', title: 'Psst: Set up broker', group: 'Psst', palette: true, slash: { name: 'psst-setup' }, run: () => run('setup') },
     { id: 'psst-reauthorize', title: 'Psst: Reauthorize (explicit HTTPS endpoint required)', description: 'Usage: /psst-reauthorize <https://broker.example.com>. Requests replacement without another confirmation; broker admin approval still required. No broker switching.', group: 'Psst', palette: true, slash: { name: 'psst-reauthorize', arguments: true }, run: input => run('reauthorize', input) },
+    { id: 'psst-connect', title: 'Psst: Connect using saved authorization', description: 'Reconnect this chat without setup or replacement authorization.', group: 'Psst', palette: true, slash: { name: 'psst-connect' }, run: () => run('connect') },
+    { id: 'psst-disconnect', title: 'Psst: Disconnect this chat', description: 'Stop transport until /psst-connect, including across reload. Retain credentials and local data.', group: 'Psst', palette: true, slash: { name: 'psst-disconnect' }, run: () => run('disconnect') },
     { id: 'psst-status', title: 'Psst: Check status', group: 'Psst', palette: true, slash: { name: 'psst-status' }, run: () => run('status') },
     { id: 'psst-cancel-setup', title: 'Psst: Pause setup', group: 'Psst', palette: true, slash: { name: 'psst-cancel-setup' }, run: () => run('cancel') },
   ] }));

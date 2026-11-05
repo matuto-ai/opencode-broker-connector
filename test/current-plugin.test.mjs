@@ -12,10 +12,11 @@ import { loadBrokerReference } from '../src/reference.mjs';
 const reference=await loadBrokerReference();
 async function fixture(t) {
  const dir=mkdtempSync(join(tmpdir(),'psst-native-plugin-'));t.after(()=>rmSync(dir,{recursive:true,force:true}));
- const stored=new Map(),tools=new Map(),hooks=new Map(),states=[];
+ const stored=new Map(),tools=new Map(),hooks=new Map(),states=[],rpc=new Map();
  const settings={stateDirectory:join(dir,'state'),broker:{url:'https://fixture.invalid/'}};
  const ctx={app:{version:'2.2.5'},location:{directory:dir},storage:{get:async k=>stored.get(k),set:async(k,v)=>stored.set(k,v),scan:async({prefix})=>({entries:[...stored].filter(([k])=>k.startsWith(prefix)).map(([key,value])=>({key,value}))})},
   session:{get:async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:dir},time:{created:1}}),synthetic:async()=>{},context:async()=>[{id:'msg',type:'assistant',content:['call1','call2'].map(id=>({type:'tool',id,name:'broker_send',time:{created:Date.now()-1000}})),time:{created:Date.now()-1000}}],hook:async(name,fn)=>{hooks.set(name,fn);return{dispose:async()=>hooks.delete(name)};}},
+  rpc:{register:async(definition,handlers)=>{rpc.set(definition.id,handlers);return{dispose:async()=>rpc.delete(definition.id)};}},
   tool:{transform:async callback=>{callback({get:name=>tools.get(name),add:definition=>tools.set(definition.name,definition)});return{dispose:async()=>tools.clear()};}},
   event:{async *subscribe({signal}){if(signal.aborted)return;await new Promise(r=>signal.addEventListener('abort',r,{once:true}));}}};
  const options={presenceFactory:()=>({selected:()=>({has:()=>true})}),ctx,reference,tool,setupOptions:{directory:join(dir,'installation')},setupEnabled:false,loadSettings:async()=>settings,clientFactory:inbox=>({inbox}),
@@ -23,8 +24,126 @@ async function fixture(t) {
    const state={identity:client.inbox.identity,binding,currentBinding,operationContext,client};states.push(state);
    return{start:async()=>assert.ok(await currentBinding()),stop:async()=>client.inbox.close(),tools:Object.fromEntries(reference.TOOL_DEFINITIONS.map(d=>[d.name,{execute:async(args,context)=>JSON.stringify({sessionID:binding.sessionID,operation:operationContext(context)})}]))};},
   deliveryFactory:()=>({start(){},stop:async()=>{},event(){}})};
- const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());return{dir,ctx,tools,hooks,states,runtime,settings,stored,options};
+ const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());return{dir,ctx,tools,hooks,states,runtime,settings,stored,options,rpc:()=>rpc.get('matuto.psst.setup')};
 }
+test('native connect/disconnect preserve the mailbox and remain disconnected across reload', async t => {
+ const f=await fixture(t), context={signal:new AbortController().signal}, input={sessionID:'one'};
+ await f.runtime.connect('one'); await f.runtime.connect('two');
+ const identity=f.runtime.status('one').client_id, inbox=f.states[0].client.inbox, now=Date.now();
+ const envelope={protocol_version:'1',message_id:randomUUID(),recipient_id:identity,recipient_sequence:1,
+  sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
+  origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'Keep this unread message.'},
+  accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null};
+ inbox.accept(envelope);
+ const disconnected=await f.rpc().disconnect(input,context);
+ assert.equal(disconnected.disconnected,true); assert.equal(disconnected.connected,false);
+ assert.equal(f.runtime.status('two').connected,true);
+ await f.hooks.get('prompt')({sessionID:'one'});
+ await assert.rejects(f.runtime.connect('one'),/closed/);
+ await f.runtime.dispose();
+ const reloaded=await setupNativePlugin(f.options);t.after(()=>reloaded.dispose());
+ assert.equal(reloaded.status('one').disconnected,true);assert.equal(reloaded.status('one').connected,false);
+ await assert.rejects(reloaded.connect('one'),/closed/);
+ const connected=await f.rpc().connect(input,context);
+ assert.equal(connected.connected,true);assert.equal(connected.disconnected,false);assert.equal(connected.client_id,identity);
+ assert.deepEqual(f.states.at(-1).client.inbox.head().envelope,envelope);
+ const count=f.states.length;await f.rpc().connect(input,context);assert.equal(f.states.length,count,'already connected is a no-op');
+ await reloaded.dispose();
+ const again=await setupNativePlugin(f.options);t.after(()=>again.dispose());
+ await again.connect('one');assert.equal(again.status('one').client_id,identity,'successful resume durably clears disconnect');
+});
+
+test('disconnect pauses only this chat setup and reconnect does not enroll or resume the wait', async t => {
+ const {readPending}=await import('../src/installation.mjs');
+ const f=await fixture(t);await f.runtime.dispose();let begins=0;
+ const pending={state:'pending',requestId:'same-request'};
+ const runtime=await setupNativePlugin({...f.options,setupEnabled:true,setupOptions:{...f.options.setupOptions,
+  loadHelper:async()=>({readApprovalState:()=>pending,beginApproval:async()=>{begins++;return pending;},pollApproval:async()=>pending})
+ }});t.after(()=>runtime.dispose());
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ await f.rpc().setup({...input,broker_url:'https://fixture.invalid'},context);assert.equal(begins,1);
+ await f.rpc().disconnect(input,context);assert.equal(readPending(f.options.setupOptions.directory).paused,true);
+ const stopped=await f.rpc().setup({...input,broker_url:'https://fixture.invalid'},context);
+ assert.equal(stopped.disconnected,true);assert.equal(begins,1);
+ await f.rpc().connect(input,context);assert.equal(begins,1);assert.equal(readPending(f.options.setupOptions.directory).paused,true);
+});
+
+test('native connection commands reject inactive, foreign and cancelled contexts without changing access', async t => {
+ const f=await fixture(t),context={signal:new AbortController().signal};await f.runtime.connect('one');
+ const before=[...f.stored],original=f.ctx.session.get;
+ f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'foreign',location:{directory:'/tmp'},time:{created:1}});
+ for(const name of ['connect','disconnect']) await assert.rejects(f.rpc()[name]({sessionID:'one'},context),/mismatch/);
+ f.ctx.session.get=original;
+ for(const name of ['connect','disconnect']) await assert.rejects(f.rpc()[name]({sessionID:'one'},{signal:AbortSignal.abort()}));
+ assert.deepEqual([...f.stored],before);assert.equal(f.runtime.status('one').connected,true);
+ await f.runtime.dispose();
+ const runtime=await setupNativePlugin({...f.options,presenceFactory:()=>({selected:()=>new Set()})});t.after(()=>runtime.dispose());
+ for(const name of ['connect','disconnect']) await assert.rejects(f.rpc()[name]({sessionID:'one'},context),/not_selected/);
+ assert.deepEqual([...f.stored],before);
+});
+
+test('failed explicit reconnect retains the durable disconnect and never starts setup', async t => {
+ const f=await fixture(t),context={signal:new AbortController().signal},input={sessionID:'one'};
+ await f.runtime.connect('one');await f.rpc().disconnect(input,context);await f.runtime.dispose();
+ const runtime=await setupNativePlugin({...f.options,loadSettings:async options=>{if(options)return f.settings;throw Error('credential_expired');}});t.after(()=>runtime.dispose());
+ await assert.rejects(f.rpc().connect(input,context),/credential_expired/);
+ assert.equal(runtime.status('one').disconnected,true);
+ assert.equal([...f.stored.values()].find(v=>v?.sessionID==='one').reason,'disconnected');
+ assert.equal(f.states.length,1);assert.equal(f.tools.has('broker_setup'),false);
+});
+
+test('connect without saved authorization enables setup but never enrolls', async t => {
+ const f=await fixture(t),context={signal:new AbortController().signal},input={sessionID:'one'};
+ await f.rpc().disconnect(input,context);await f.runtime.dispose();
+ const runtime=await setupNativePlugin({...f.options,loadSettings:async()=>undefined});t.after(()=>runtime.dispose());
+ const result=await f.rpc().connect(input,context);
+ assert.equal(result.state,'setup_needed');assert.equal(result.connected,false);assert.equal(result.disconnected,false);assert.equal(f.states.length,0);
+});
+
+test('disconnect drains transport even if persisting the stop fails', async t => {
+ const f=await fixture(t),context={signal:new AbortController().signal};await f.runtime.connect('one');
+ const set=f.ctx.storage.set;f.ctx.storage.set=async(k,v)=>{if(v.reason==='disconnected')throw Error('storage unavailable');return set(k,v);};
+ await assert.rejects(f.rpc().disconnect({sessionID:'one'},context),/storage unavailable/);
+ assert.equal(f.runtime.status('one').connected,false);assert.equal(f.runtime.status('one').disconnected,true);
+ assert.equal(await f.states[0].currentBinding(),null);await assert.rejects(f.runtime.connect('one'),/closed/);
+});
+
+test('disconnect cancels an in-flight explicit connect before allowing another connection command', async t => {
+ const f=await fixture(t);await f.runtime.dispose();let entered;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ const runtime=await setupNativePlugin({...f.options,adapterFactory:args=>({ ...f.options.adapterFactory(args),
+  start:async()=>{entered();await new Promise(resolve=>args.binding.signal.addEventListener('abort',resolve,{once:true}));throw Error('connection cancelled');}
+ })});t.after(()=>runtime.dispose());
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ const connecting=f.rpc().connect(input,context);const rejected=assert.rejects(connecting,/cancelled/);await ready;
+ const result=await f.rpc().disconnect(input,context);await rejected;
+ assert.equal(result.disconnected,true);assert.equal(result.connected,false);
+ await assert.rejects(runtime.connect('one'),/closed/);
+});
+
+test('archive and unarchive cannot clear a durable explicit disconnect', async t => {
+ const {EventEmitter,on}=await import('node:events');
+ const f=await fixture(t);await f.runtime.dispose();const emitter=new EventEmitter();
+ f.ctx.event.subscribe=async function*({signal}){for await(const [event] of on(emitter,'event',{signal}))yield event;};
+ const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());await runtime.connect('one');
+ await f.rpc().disconnect({sessionID:'one'},{signal:new AbortController().signal});
+ const key=[...f.stored.keys()].find(k=>k.startsWith('psst-v2-session:'));
+ for(const type of ['session.archived','session.unarchived']) {
+  emitter.emit('event',{type,data:{sessionID:'one'}});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.stored.get(key).enabled,false);assert.equal(f.stored.get(key).reason,'disconnected');
+ }
+ await runtime.dispose();const next=await setupNativePlugin(f.options);t.after(()=>next.dispose());
+ assert.equal(next.status('one').disconnected,true);await assert.rejects(next.connect('one'),/closed/);
+});
+
+test('explicit reconnect cannot lift unknown disabled-session tombstones', async t => {
+ const f=await fixture(t);await f.runtime.connect('one');await f.runtime.dispose();
+ const key=[...f.stored.keys()].find(k=>k.startsWith('psst-v2-session:'));f.stored.set(key,{sessionID:'one',enabled:false});
+ const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());
+ for(const name of ['connect','disconnect']) await assert.rejects(f.rpc()[name]({sessionID:'one'},{signal:new AbortController().signal}),/closed/);
+ assert.deepEqual(f.stored.get(key),{sessionID:'one',enabled:false});assert.equal(f.states.length,1);
+});
+
 test('OpenCode registers automatic-only lifecycle tools, preserves drafts and isolates native session identities',async t=>{
  const f=await fixture(t);assert.equal(f.tools.size,8);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
  const prompt={sessionID:'one',messageID:'human',prompt:{text:'keep my draft'}};await f.hooks.get('prompt')(prompt);await f.runtime.connect('one');await f.runtime.connect('two');assert.equal(f.states.length,2);assert.notEqual(f.states[0].identity.client_id,f.states[1].identity.client_id);assert.equal(prompt.prompt.text,'keep my draft');

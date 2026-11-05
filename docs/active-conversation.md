@@ -15,6 +15,8 @@ same persisted identity; heartbeat alone is not used to revive an expired lease.
 A synthetic submission already in flight may finish: its original journal and
 receipt are reconciled, not duplicated or rewritten.
 
+`/psst-disconnect` is a durable, per-chat stop: it drains transport and native delivery, pauses that chat's pending setup wait, and preserves authorization, identity and journals. Focus changes, prompts, tools and reload do not reconnect it. `/psst-connect` explicitly reuses saved authorization and the same mailbox; an already connected chat is a no-op. It never enrolls, replaces authorization or overrides an unknown disabled-session tombstone. With no saved authorization it enables the chat and directs you to setup. A failed reconnect retains an existing disconnect. Native interrupted/failed-turn guards remain in force, and paused setup requires a separate explicit setup action.
+
 No TUI signal means offline, including a headless server. A remote TUI without a
 shared local private directory is unsupported and shows `Psst offline`; it does
 not restore all historic conversations. A newly selected conversation does not
@@ -38,11 +40,9 @@ already-authorized conversation (and cause its normal automatic wake/cost).
 It cannot create an authorized native binding, supply credentials, change scopes,
 redirect an inbox to another session, or grant tool access. The server continues
 to own credentials and journals and independently verifies exact native bindings.
-There is no public activate RPC or credential exchange. The native setup RPC accepts only a selected session ID, broker URL and request/revision-bound replacement intent; it cannot supply credentials or bypass broker admin approval.
+There is no public activate RPC or credential exchange. The native setup RPC accepts a selected session ID, broker URL and request/revision-bound replacement intent; its connect/disconnect methods accept only a selected session ID and operate on saved authorization. They cannot supply credentials or bypass broker admin approval.
 
-Archive suspension can resume after native unarchive. Explicit disabled records,
-and older disabled records whose reason is unknown, remain disabled; selection
-never overrides them. Existing unread and uncertain operations remain intact.
+Archive suspension can resume after native unarchive, unless the chat was explicitly disconnected. Disconnected records require `/psst-connect`; older disabled records whose reason is unknown remain disabled even with that command. Selection never overrides either. Existing unread and uncertain operations remain intact.
 
 ## Validation limits
 

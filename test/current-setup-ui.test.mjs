@@ -23,7 +23,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
       dialog: { prompt: async arg => { prompts.push(arg); return prompt(); }, confirm: async arg => { confirmations.push(arg); return confirm(); } } },
     client: { rpc(definition) {
       assert.equal(definition, SETUP_RPC);
-      return Object.fromEntries(['status', 'setup', 'cancel'].map(name => [name, async (input, options) => {
+      return Object.fromEntries(['status', 'setup', 'cancel', 'connect', 'disconnect'].map(name => [name, async (input, options) => {
         calls.push({ name, input, options });
         assert.deepEqual(options.location, ctx.location); assert.ok(options.signal instanceof AbortSignal);
         return typeof result[name] === 'function' ? result[name](input, options) : result[name] ?? { state: name === 'cancel' ? 'paused' : 'pending' };
@@ -37,7 +37,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
 }
 test('official native palette/slash commands use one URL and selected-session RPC', async t => {
   const f = fixture(t);
-  assert.deepEqual(f.commands.map(x => [x.id, x.slash.name, x.palette]), ['psst-setup', 'psst-reauthorize', 'psst-status', 'psst-cancel-setup'].map(x => [x, x, true]));
+  assert.deepEqual(f.commands.map(x => [x.id, x.slash.name, x.palette]), ['psst-setup', 'psst-reauthorize', 'psst-connect', 'psst-disconnect', 'psst-status', 'psst-cancel-setup'].map(x => [x, x, true]));
   await f.run('psst-setup');
   assert.equal(f.prompts.length, 1); assert.equal(f.confirmations.length, 0);
   assert.deepEqual(f.calls.map(x => [x.name, x.input]), [
@@ -48,6 +48,41 @@ test('official native palette/slash commands use one URL and selected-session RP
   await f.run('psst-status'); await f.run('psst-cancel-setup');
   assert.deepEqual(f.calls.slice(-2).map(x => [x.name, x.input]), [['status', { sessionID: 'ses_one' }], ['cancel', { sessionID: 'ses_one' }]]);
 });
+test('connect/disconnect dispatch directly to selected-session RPC without setup or confirmation', async t => {
+  const f = fixture(t, { result: { connect: { connected: true }, disconnect: { connected: false, disconnected: true } } });
+  await f.run('psst-connect'); assert.match(f.toasts.at(-1).message, /is connected/);
+  await f.run('psst-disconnect'); assert.match(f.toasts.at(-1).message, /disconnected/); assert.match(f.toasts.at(-1).message, /psst-connect/);
+  assert.deepEqual(f.calls.map(call => [call.name, call.input]), [['connect', { sessionID: 'ses_one' }], ['disconnect', { sessionID: 'ses_one' }]]);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+});
+
+test('setup and reauthorization direct a disconnected chat to connect without dialogs or enrollment', async t => {
+  const f = fixture(t, { result: { status: { disconnected: true, state: 'paused' } } });
+  await f.run('psst-setup'); await f.run('psst-reauthorize', 'https://broker.example.com');
+  assert.deepEqual(f.calls.map(call => call.name), ['status', 'status']);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+  assert.match(f.toasts.at(-1).message, /psst-connect/);
+});
+
+test('disconnect cancels the active setup UI rather than requiring its dialog to finish', async t => {
+  let complete;
+  const f = fixture(t, { prompt: () => new Promise(resolve => { complete = resolve; }), result: { disconnect: { disconnected: true } } });
+  const settingUp = f.run('psst-setup'); while (!complete) await new Promise(resolve => setImmediate(resolve));
+  await f.run('psst-disconnect'); complete('https://broker.example.com'); await settingUp;
+  assert.deepEqual(f.calls.map(call => call.name), ['status', 'disconnect']);
+  assert.equal(f.calls[0].options.signal.aborted, true);
+});
+
+for (const name of ['connect', 'disconnect']) test(`${name} preserves focus fences and redacts RPC errors`, async t => {
+  let complete;
+  const f = fixture(t, { result: { [name]: () => new Promise(resolve => { complete = resolve; }) } });
+  const action = f.run(`psst-${name}`); while (!complete) await new Promise(resolve => setImmediate(resolve));
+  f.renderer.emit('blur'); complete({ connected: true }); await action;
+  assert.equal(f.calls[0].options.signal.aborted, true); assert.doesNotMatch(f.toasts.at(-1).message, /is connected/);
+  f.ctx.client.rpc = () => ({ [name]: () => { throw Error('/private/token-secret'); } });
+  await f.run(`psst-${name}`); assert.doesNotMatch(JSON.stringify(f.toasts), /private|token-secret/);
+});
+
 test('terminal replacement binds native explicit confirmation to the exact request', async t => {
   const f = fixture(t, { result: { status: { state: 'denied', replacement_confirmation_required: true, request_id: 'ar_old' } } });
   await f.run('psst-setup');
