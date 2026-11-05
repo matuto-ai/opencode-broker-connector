@@ -2,12 +2,12 @@
 
 ## Install, configure, use
 
-The scoped 0.7.0 package is an unreleased source candidate. After publication,
+The scoped 0.8.0 package is an unreleased source candidate. After publication,
 install it using the single native plugin-manager command in the README. The
 same package loads its server and TUI entries; do not install a second wrapper.
 
 1. Select a conversation in the local OpenCode 2.2.5 TUI. Run `/psst-setup` and
-   enter only the HTTPS broker origin.
+   reuse its saved broker origin, or enter only the HTTPS origin if none is known.
 2. Open the displayed broker `/admin` page. Its form login and exact-request
    approval are human actions. Pending setup is not a connection.
 3. Once approved, use the existing send/client tools. Incoming peer data enters

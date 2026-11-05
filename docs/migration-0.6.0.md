@@ -1,13 +1,13 @@
-# 0.7.0 package and repository migration
+# 0.8.0 package and repository migration
 
-This is an unreleased source candidate, not proof of npm publication. The new package is `@matuto-ai/opencode-psst-connector@0.7.0`; the old package is `@matuto-ai/opencode-broker-connector`. No prerelease/RC package is required.
+This is an unreleased source candidate, not proof of npm publication. The new package is `@matuto-ai/opencode-psst-connector@0.8.0`; the old package is `@matuto-ai/opencode-broker-connector`. No prerelease/RC package is required.
 
 ## Owner publication order
 
 1. Review and merge the code in the existing repository; retain its history and branch protections. CI checks out this repository and runs its unit suite; it does not fetch a second repository.
 2. Rename the GitHub repository to `matuto-ai/opencode-psst-connector`. Do not create a replacement repository. Update local remotes and verify the `verify` check and repository settings after the rename. Package metadata already points at this final name.
 3. Establish the new public npm package through npm's supported owner/account setup. Configure its own trusted publisher for GitHub owner `matuto-ai`, repository `opencode-psst-connector`, workflow `npm-publish.yml`, allowing direct `npm publish`. The old package's trusted publisher does not transfer. Validate new configuration within npm's two-day first-publish window. Account and publishing actions belong to the owner, not this code change.
-4. Publish the GitHub release tagged `v0.7.0` only when the new package's publishing access is ready. The workflow checks tag/version parity and tests before publishing. Never publish the same package-name/version twice: if initial owner setup already published the final `0.7.0` artifact, do not trigger a second publish of it; reconcile the artifact and workflow plan first.
+4. Publish the GitHub release tagged `v0.8.0` only when the new package's publishing access is ready. The workflow checks tag/version parity and tests before publishing. Never publish the same package-name/version twice: if initial owner setup already published the final `0.8.0` artifact, do not trigger a second publish of it; reconcile the artifact and workflow plan first.
 5. Verify the new npm artifact, provenance, exact version and a clean native install plus upgrade. Only then deprecate the old package with a message naming its replacement. Keep old versions downloadable; do not unpublish them.
 
 ## Existing installation migration

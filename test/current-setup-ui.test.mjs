@@ -41,6 +41,7 @@ test('official native palette/slash commands use one URL and selected-session RP
   await f.run('psst-setup');
   assert.equal(f.prompts.length, 1); assert.equal(f.confirmations.length, 0);
   assert.deepEqual(f.calls.map(x => [x.name, x.input]), [
+    ['status', { sessionID: 'ses_one' }],
     ['status', { sessionID: 'ses_one', broker_url: 'https://broker.example.com' }],
     ['setup', { sessionID: 'ses_one', broker_url: 'https://broker.example.com' }],
   ]);
@@ -52,43 +53,44 @@ test('terminal replacement binds native explicit confirmation to the exact reque
   await f.run('psst-setup');
   assert.match(f.confirmations[0].message, /new credential-bound addresses/);
   assert.match(f.confirmations[0].message, /Old local data is retained/);
-  assert.deepEqual(f.calls[1].input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', replacement_confirmed: true, replacement_request_id: 'ar_old' });
+  assert.deepEqual(f.calls.at(-1).input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', replacement_confirmed: true, replacement_request_id: 'ar_old' });
 });
 test('approved uncommitted receipt resumes without replacement confirmation', async t => {
   const f = fixture(t, { result: { status: { state: 'paused', request_state: 'approved', replacement_confirmation_required: false } } });
-  await f.run('psst-setup'); assert.equal(f.confirmations.length, 0); assert.equal(f.calls[1].input.replacement_confirmed, undefined);
+  await f.run('psst-setup'); assert.equal(f.confirmations.length, 0); assert.equal(f.calls.at(-1).input.replacement_confirmed, undefined);
 });
 for (const answer of [false, undefined]) test(`replacement dismissed (${answer}) creates nothing`, async t => {
   const f = fixture(t, { confirm: async () => answer, result: { status: { replacement_confirmation_required: true, request_id: 'ar_old' } } });
-  await f.run('psst-setup'); assert.equal(f.calls.length, 1);
+  await f.run('psst-setup'); assert.equal(f.calls.length, 2);
 });
-test('prompt dismissed creates nothing', async t => {
-  const f = fixture(t, { prompt: async () => undefined }); await f.run('psst-setup'); assert.equal(f.calls.length, 0);
+test('prompt dismissed creates no setup request', async t => {
+  const f = fixture(t, { prompt: async () => undefined }); await f.run('psst-setup'); assert.equal(f.calls.length, 1);
 });
-for (const url of ['https://user:secret@broker.example.com', 'http://broker.example.com', 'https://broker.example.com/path', 'https://broker.example.com?token=secret', 'bad\x1b[2J']) test('invalid URL is rejected without RPC: ' + JSON.stringify(url), async t => {
-  const f = fixture(t, { prompt: async () => url }); await f.run('psst-setup'); assert.equal(f.calls.length, 0); assert.doesNotMatch(JSON.stringify(f.toasts), /secret|\x1b/);
+for (const url of ['https://user:secret@broker.example.com', 'http://broker.example.com', 'https://broker.example.com/path', 'https://broker.example.com?token=secret', 'bad\x1b[2J']) test('invalid URL is rejected before URL RPC: ' + JSON.stringify(url), async t => {
+  const f = fixture(t, { prompt: async () => url }); await f.run('psst-setup'); assert.equal(f.calls.length, 1); assert.doesNotMatch(JSON.stringify(f.toasts), /secret|\x1b/);
 });
 for (const change of ['session', 'location', 'blur', 'dispose', 'away-back']) test(`prompt rejects ${change} changes before sending URL`, async t => {
   let resolve; const f = fixture(t, { prompt: () => new Promise(r => { resolve = r; }) });
   const running = f.run('psst-setup');
+  while (!resolve) await new Promise(r => setImmediate(r));
   if (change === 'session' || change === 'away-back') f.route({ type: 'session', sessionID: 'ses_other' });
   if (change === 'away-back') f.route({ type: 'session', sessionID: 'ses_one' });
   if (change === 'location') f.ctx.location = { directory: '/another-location' };
   if (change === 'blur') { f.renderer.emit('blur'); f.renderer.emit('focus'); }
   if (change === 'dispose') f.stop();
   resolve('https://broker.example.com'); await running;
-  assert.equal(f.calls.length, 0); assert.equal(f.renderer.listenerCount('blur'), 0); assert.equal(f.renderer.listenerCount('frame'), 0);
+  assert.equal(f.calls.length, 1); assert.equal(f.renderer.listenerCount('blur'), 0); assert.equal(f.renderer.listenerCount('frame'), 0);
 });
 test('selection change while replacement confirm is open cannot replace', async t => {
   let resolve; const f = fixture(t, { confirm: () => new Promise(r => { resolve = r; }), result: { status: { replacement_confirmation_required: true, request_id: 'ar_old' } } });
   const pending = f.run('psst-setup'); while (!resolve) await new Promise(r => setImmediate(r));
   f.route({ type: 'session', sessionID: 'ses_other' }); resolve(true); await pending;
-  assert.equal(f.calls.length, 1);
+  assert.equal(f.calls.length, 2);
 });
 test('duplicate command during prompt is bounded; dismissal permits another', async t => {
   let resolve; const f = fixture(t, { prompt: () => new Promise(r => { resolve = r; }) });
-  const running = f.run('psst-setup'); await f.run('psst-setup'); assert.equal(f.prompts.length, 1);
-  resolve(undefined); await running; await f.run('psst-status'); assert.equal(f.calls.length, 1);
+  const running = f.run('psst-setup'); while (!resolve) await new Promise(r => setImmediate(r)); await f.run('psst-setup'); assert.equal(f.prompts.length, 1);
+  resolve(undefined); await running; await f.run('psst-status'); assert.equal(f.calls.length, 2);
 });
 test('errors and arbitrary status fields never disclose server secrets or private paths', async t => {
   const f = fixture(t, { result: { status: () => { throw Error('/private/token-secret\x1b[2J'); } } });
@@ -116,7 +118,7 @@ test('focus change during preflight aborts RPC and never begins setup', async t 
 });
 test('malformed replacement request fence fails closed without confirmation or setup', async t => {
   const f = fixture(t, { result: { status: { replacement_confirmation_required: true, request_id: '/private/secret' } } });
-  await f.run('psst-setup'); assert.equal(f.confirmations.length, 0); assert.equal(f.calls.length, 1);
+  await f.run('psst-setup'); assert.equal(f.confirmations.length, 0); assert.equal(f.calls.length, 2);
   assert.doesNotMatch(JSON.stringify(f.toasts), /secret/);
 });
 test('home route cannot prompt, inspect status, or cancel another session', async t => {
@@ -150,7 +152,7 @@ for (const phase of ['prompt', 'rpc']) test(`two independent TUI views stay isol
   for (const call of first.calls) assert.equal(call.options.signal.aborted, false);
   release(phase === 'prompt' ? 'https://broker.example.com' : { state: 'pending', request_id: 'first-request', request_outcome: 'saved' });
   await action;
-  assert.deepEqual(first.calls.map(c => c.input.sessionID), ['ses_one', 'ses_one']);
+  assert.deepEqual(first.calls.map(c => c.input.sessionID), ['ses_one', 'ses_one', 'ses_one']);
   assert.deepEqual(second.calls.map(c => c.input.sessionID), ['ses_three']);
   for (const call of first.calls) assert.equal(call.options.signal.aborted, false);
   assert.doesNotMatch(first.toasts.at(-1).message, /suspended/);
@@ -213,7 +215,7 @@ test('reauthorize dispatches directly, reuses configured origin, and confirms ex
   assert.match(f.confirmations[0].message, /Broker: https:\/\/broker.example.com/);
   assert.match(f.confirmations[0].message, /after approval and safe attachment/);
   assert.match(f.confirmations[0].message, /does not revoke the old credential/);
-  assert.deepEqual(f.calls.map(c => c.name), ['status', 'status', 'setup']);
+  assert.deepEqual(f.calls.map(c => c.name), ['status', 'setup']);
   assert.deepEqual(f.calls.at(-1).input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', selection_revision: 'revision-one', replacement_confirmed: true, replacement_request_id: 'old' });
   assert.match(f.toasts.at(-1).message, /new/); assert.match(f.toasts.at(-1).message, /https:\/\/broker.example.com\/admin/);
 });
@@ -298,4 +300,19 @@ test('candidate annotation does not override denied or pending setup state', asy
     const f = fixture(t, { result: { status: { state, request_state: 'approved', connected: false } } });
     await f.run('psst-status'); assert.doesNotMatch(f.toasts.at(-1).message, /approved candidate/);
   }
+});
+
+test('explicit status and pause slash commands dispatch without exploratory questions or diagnostics', async t => {
+  const f = fixture(t, { prompt: () => assert.fail('No missing parameter'), confirm: () => assert.fail('No redundant command approval') });
+  await f.run('psst-status'); await f.run('psst-cancel-setup');
+  assert.deepEqual(f.calls.map(call => call.name), ['status', 'cancel']);
+  assert.ok(f.calls.every(call => call.input.sessionID === 'ses_one'));
+});
+
+test('setup reuses known broker and preflight without a redundant URL prompt or confirmation', async t => {
+  const f = fixture(t, { prompt: () => assert.fail('Known broker must be reused'), confirm: () => assert.fail('Pending request needs no new authorization'),
+    result: { status: { broker_url: 'https://broker.example.com', state: 'pending', request_id: 'same', selection_revision: 'rev' } } });
+  await f.run('psst-setup');
+  assert.deepEqual(f.calls.map(call => call.name), ['status', 'setup']);
+  assert.deepEqual(f.calls[1].input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', selection_revision: 'rev' });
 });

@@ -1,5 +1,6 @@
 import { createToolScope } from './tool-scope.mjs';
 import { isAbsolute, normalize } from 'node:path';
+import { nativeToolDescription } from './collaboration-guidance.mjs';
 
 const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadata', 'broker_message_status', 'broker_receive', 'broker_sent_history', 'broker_message_content', 'broker_resend', 'broker_cancel'];
 // Reviewed SDK adds two cooperative presence tools. Native OpenCode keeps its
@@ -7,7 +8,7 @@ const TOOL_NAMES = ['broker_list_clients', 'broker_send', 'broker_update_metadat
 export function nativeToolDefinitions(definitions) {
   const known=[...TOOL_NAMES,'broker_presence_events','broker_acknowledge_presence_event'];
   if(!Array.isArray(definitions)||definitions.length!==known.length||new Set(definitions.map(d=>d.name)).size!==known.length||definitions.some(d=>!known.includes(d.name)))throw new Error('Shared tool catalog changed; review it before enabling this adapter.');
-  return definitions.filter(d=>TOOL_NAMES.includes(d.name));
+  return definitions.filter(d=>TOOL_NAMES.includes(d.name)).map(d => ({ ...d, description: nativeToolDescription(d) }));
 }
 const localId = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,256}$/.test(value);
 const absolute = value => typeof value === 'string' && isAbsolute(value) && normalize(value) === value;
