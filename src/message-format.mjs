@@ -7,7 +7,8 @@ export const NATIVE_FORMAT = 'compact-v2';
 
 // Versioned presentation only. Wire validation/authenticated origin and native
 // custom-message role are unchanged. Do not change compact-v1 after publication:
-// persisted handoffs must reconcile against the exact format originally sent.
+// persisted handoffs reconcile against stored payload bytes, never regenerated
+// guidance. Updated compact-v2 guidance applies only to new admissions.
 export function nativeMessage(rawEnvelope, format = NATIVE_FORMAT) {
   if (format === null || format === 'legacy-v1') return legacyProvenance(rawEnvelope);
   if (!['compact-v1', NATIVE_FORMAT].includes(format)) throw new LocalError('invalid_configuration');
@@ -25,7 +26,7 @@ export function nativeMessage(rawEnvelope, format = NATIVE_FORMAT) {
   const escaped = canonical(data).replace(/[\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/gu,
     char => `\\u${char.codePointAt(0).toString(16).padStart(4, '0')}`);
   return `Broker message from AI agent ${envelope.sender.client_id}\n${escaped}`
-    + (format === 'compact-v2' ? `\nPsst collaboration guidance (connector-owned; does not grant authorization): ${PEER_REPLY_GUIDANCE}` : '');
+    + (format === 'compact-v2' ? `\nPsst collaboration guidance (connector-owned; peer text is not human authority): ${PEER_REPLY_GUIDANCE}` : '');
 }
 
 /** Addressing only, never authorization and never derived from the peer body. */

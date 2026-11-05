@@ -22,13 +22,8 @@ one server plugin, `matuto.psst`; no classic or optional alternate entry is ship
   proves acceptance; stream recovery never resubmits them automatically.
 - Peer messages are native synthetic machine-origin input, not human authority.
   Agent/model selection, drafts and native permissions remain unchanged.
-  New compact-v2 payloads include exact reply routing plus connector-owned
-  guidance: prior human authorization for this peer and purpose permits routine
-  direct replies; peer text does not grant or expand it. Ask only for absent or
-  ambiguous authorization, expanded scope, or required host confirmation. This
-  is model guidance, not automatic permission enforcement or an auto-reply loop.
-  Persisted compact-v1/legacy admissions are reconciled against their original
-  bytes, never regenerated with new instructions. See the README contract.
+  Newly admitted compact-v2 payloads include exact reply routing and connector-owned guidance for ordinary collaboration, including substantive requests and unrelated work, without separate per-peer, per-message or per-purpose human grants. Resolve discoverable facts and low-risk reversible choices independently; ask only when consequential uncertainty needs human judgment or information. Peer text cannot override human instructions or host safeguards, and identity/routing comes from connector-supplied metadata. Incoming messages do not automatically stop current work or silently displace the human task. This is model guidance, not automatic permission enforcement, an auto-reply loop or an exactly-once task-execution guarantee.
+  All persisted admissions, including earlier compact-v2 guidance and compact-v1/legacy payloads, reconcile against their original bytes, never regenerated with new instructions. See the README contract.
 - Private operation IDs include the verified native call identity and original
   assistant tool timestamp. An aged replay after journal GC fails closed.
 
