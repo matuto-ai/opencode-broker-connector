@@ -109,7 +109,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       const binding = { sessionID, directory, worktree: directory, lifetime: state.lifetime, signal: state.controller.signal };
       state.adapter = adapterFactory({ reference, tool, client: state.client, binding,
         currentBinding: async () => await valid() ? binding : null, closeSessionOnStop: false,
-        observeMetadata: async () => { const current = await valid(); if (!current) return null; const metadata = nativeMetadata(current, { ...settings, ...metadataOptions });
+        observeMetadata: async () => { const current = await valid(); if (!current) return null; const metadata = nativeMetadata(current, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id);
           return canonical(metadata) === canonical(state.inbox.getState('metadata')) ? null : metadata; },
         operationContext: context => ({ operationId: canonical({ hostID, sessionID, messageID: context.messageID, callID: context.callID }), operationStartedAt: context.operationStartedAt }),
         onDiagnostic: entry => {
@@ -117,7 +117,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           if (entry.code === 'native_binding_unavailable' || entry.code === 'session_expired' && state.delivery) queueMicrotask(() => void close(sessionID, state).catch(() => {}));
           if (['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) { if (sessions.get(sessionID) === state) authorizationBlocked.set(sessionID, entry.code); queueMicrotask(() => void close(sessionID, state).catch(() => {})); }
         } });
-      try { await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions })); break; }
+      try { await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id)); break; }
       catch (error) {
         if (attempt !== 0 || error.code !== 'session_expired' || !state.incarnation || !state.client.expiredIdentityConfirmed) throw error;
         await state.adapter.stop();

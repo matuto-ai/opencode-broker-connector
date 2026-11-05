@@ -271,6 +271,23 @@ test('OpenCode reload reopens same exact broker inbox identity; owner conflicts 
  assert.throws(()=>openNativeInbox({reference,settings:f.settings,binding}),{code:'owner_conflict'});
  await f.runtime.dispose();const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());await runtime.connect('one');assert.deepEqual(f.states.at(-1).identity,original);
 });
+test('native titles distinguish equal-name conversations and rename metadata without rotating the mailbox', async t => {
+ const f=await fixture(t);await f.runtime.dispose();const observers=new Map(),initial=new Map();let title='Review';
+ const get=f.ctx.session.get;f.ctx.session.get=async args=>({...await get(args),title});
+ const options={...f.options,adapterFactory:args=>{
+  const adapter=f.options.adapterFactory(args);observers.set(args.binding.sessionID,args.observeMetadata);
+  return{...adapter,start:async metadata=>{initial.set(args.binding.sessionID,metadata);args.client.inbox.setState('metadata',metadata);await adapter.start(metadata);}};
+ }};
+ const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());await runtime.connect('one');await runtime.connect('two');
+ const id=runtime.status('one').client_id,inbox=f.states[0].client.inbox,directory=inbox.directory;
+ assert.equal(initial.get('one').name,`Review [${id.slice(0,8)}]`);assert.notEqual(initial.get('one').name,initial.get('two').name);
+ assert.equal(await observers.get('one')(),null);title='Renamed';
+ const changed=await observers.get('one')();assert.equal(changed.name,`Renamed [${id.slice(0,8)}]`);
+ assert.equal(runtime.status('one').client_id,id);assert.equal(inbox.directory,directory);assert.equal(f.states.length,2);
+ await runtime.dispose();const reloaded=await setupNativePlugin(options);t.after(()=>reloaded.dispose());await reloaded.connect('one');
+ assert.equal(reloaded.status('one').client_id,id);assert.equal(initial.get('one').name,changed.name);
+});
+
 test('OpenCode rejects classic/unknown host version and foreign project sessions',async t=>{
  const f=await fixture(t);await f.runtime.dispose();f.ctx.app.version='1.19.4';await assert.rejects(()=>setupNativePlugin(f.options),/capability/);f.ctx.app.version='2.2.5';f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'foreign',location:{directory:'/tmp'},time:{created:1}});const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());await assert.rejects(()=>runtime.connect('foreign'),/mismatch/);
 });
