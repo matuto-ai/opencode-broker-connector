@@ -207,14 +207,11 @@ test('setup owned elsewhere stops at preflight, without replaying confirmation',
   assert.match(f.toasts.at(-1).message, /belongs to another chat/);
 });
 
-test('reauthorize dispatches the explicit matching origin and confirms exact target and revision', async t => {
-  const f = fixture(t, { result: { status: { broker_url: 'https://broker.example.com', state: 'approved', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'revision-one' },
+test('reauthorize supplies command intent with the exact request and revision, without another dialog', async t => {
+  const f = fixture(t, { confirm: () => assert.fail('The explicit command already supplies replacement intent'), result: { status: { broker_url: 'https://broker.example.com', state: 'approved', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'revision-one' },
     setup: { state: 'pending', request_id: 'new', approval_url: 'https://broker.example.com/admin', connected: true } } });
   await f.run('psst-reauthorize', 'https://broker.example.com/');
-  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 1);
-  assert.match(f.confirmations[0].message, /Broker: https:\/\/broker.example.com/);
-  assert.match(f.confirmations[0].message, /after approval and safe attachment/);
-  assert.match(f.confirmations[0].message, /does not revoke the old credential/);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
   assert.deepEqual(f.calls.map(c => c.name), ['status', 'setup']);
   assert.deepEqual(f.calls.at(-1).input, { sessionID: 'ses_one', broker_url: 'https://broker.example.com', reauthorize: true, selection_revision: 'revision-one', replacement_confirmed: true, replacement_request_id: 'old' });
   assert.match(f.toasts.at(-1).message, /new/); assert.match(f.toasts.at(-1).message, /https:\/\/broker.example.com\/admin/);
@@ -230,20 +227,29 @@ for (const state of ['pending', 'paused', 'approved']) test(`reauthorize reconci
   if (state === 'approved') assert.match(f.toasts.at(-1).message, /not connected yet/);
 });
 
-for (const change of ['cancel', 'blur', 'session', 'location']) test(`reauthorization confirmation rejects ${change} without setup`, async t => {
+for (const change of ['blur', 'session', 'location', 'dispose']) test(`reauthorization preflight rejects ${change} without setup`, async t => {
   let release;
-  const f = fixture(t, { confirm: () => new Promise(resolve => { release = resolve; }), result: { status: { broker_url: 'https://broker.example.com', state: 'revoked', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'rev' } } });
+  const f = fixture(t, { confirm: () => assert.fail('No replacement dialog'), result: { status: () => new Promise(resolve => { release = resolve; }) } });
   const action = f.run('psst-reauthorize', 'https://broker.example.com'); while (!release) await new Promise(resolve => setImmediate(resolve));
   if (change === 'blur') f.renderer.emit('blur');
   if (change === 'session') f.route({ type: 'session', sessionID: 'other' });
   if (change === 'location') { f.ctx.location = { directory: '/another-location' }; f.renderer.emit('frame'); }
-  release(change !== 'cancel'); await action;
+  if (change === 'dispose') f.stop();
+  release({ broker_url: 'https://broker.example.com', state: 'revoked', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'rev' }); await action;
+  assert.equal(f.calls[0].options.signal.aborted, true);
   assert.equal(f.calls.filter(c => c.name === 'setup').length, 0);
 });
 
-test('reauthorize without saved origin uses its explicit endpoint and retains confirmation', async t => {
-  const f = fixture(t, { result: { status: { state: 'setup_needed', selection_revision: null } } });
-  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 1);
+for (const request_id of [undefined, '', '/private/secret', 'x'.repeat(129)]) test(`reauthorize rejects an invalid previous-request fence: ${JSON.stringify(request_id)}`, async t => {
+  const f = fixture(t, { confirm: () => assert.fail('No replacement dialog'), result: { status: { broker_url: 'https://broker.example.com', replacement_confirmation_required: true, request_id, selection_revision: 'rev' } } });
+  await f.run('psst-reauthorize', 'https://broker.example.com');
+  assert.deepEqual(f.calls.map(call => call.name), ['status']);
+  assert.doesNotMatch(JSON.stringify(f.toasts), /private|secret/);
+});
+
+test('reauthorize without saved origin uses its explicit endpoint without another dialog', async t => {
+  const f = fixture(t, { confirm: () => assert.fail('No replacement dialog'), result: { status: { state: 'setup_needed', selection_revision: null } } });
+  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
   assert.equal(f.calls.at(-1).name, 'setup'); assert.equal(f.calls.at(-1).input.selection_revision, null);
 });
 
@@ -280,7 +286,7 @@ test('selected but not connected candidate is not reported as working access', a
   assert.doesNotMatch(f.toasts.at(-1).message, /Existing connection stays active/);
 });
 
-test('reauthorize reconciles a lost replacement response without replaying confirmation', async t => {
+test('reauthorize reconciles a lost replacement response without another dialog or replacement intent', async t => {
   let state = { broker_url: 'https://broker.example.com', state: 'revoked', request_id: 'old', replacement_confirmation_required: true, selection_revision: 'rev' }, attempts = 0;
   const f = fixture(t, { result: { status: () => state, setup: () => {
     state = { ...state, state: 'pending', request_id: 'same-candidate', replacement_confirmation_required: false };
@@ -288,7 +294,7 @@ test('reauthorize reconciles a lost replacement response without replaying confi
     return { ...state, request_outcome: 'saved' };
   } } });
   await f.run('psst-reauthorize', 'https://broker.example.com'); assert.match(f.toasts.at(-1).message, /request=unknown/);
-  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.confirmations.length, 1);
+  await f.run('psst-reauthorize', 'https://broker.example.com'); assert.equal(f.confirmations.length, 0);
   assert.equal(f.calls.at(-1).input.replacement_confirmed, undefined);
   assert.match(f.toasts.at(-1).message, /same-candidate/);
 });

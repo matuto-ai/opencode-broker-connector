@@ -40,9 +40,9 @@ const stateMessages = {
   setup_needed: 'Enter your broker URL with /psst-setup.',
   pending: 'Waiting for human approval in the broker admin UI. Use /psst-status to check.',
   approved: 'Broker authorization approved.',
-  denied: 'The approval request was denied. A new request requires confirmation in /psst-reauthorize <https-origin>.',
-  expired: 'The approval request expired. A new request requires confirmation in /psst-reauthorize <https-origin>.',
-  revoked: 'The authorization was revoked. A new request requires confirmation in /psst-reauthorize <https-origin>.',
+  denied: 'The approval request was denied. Request a replacement with /psst-reauthorize <https-origin>.',
+  expired: 'The approval request expired. Request a replacement with /psst-reauthorize <https-origin>.',
+  revoked: 'The authorization was revoked. Request a replacement with /psst-reauthorize <https-origin>.',
   paused: 'Local setup is paused. Existing authorization and local data are retained.',
   setup_blocked: 'Setup could not continue. Check /psst-status before retrying.',
   setup_owner_recovery_required: 'Setup ownership needs recovery. Existing authorization and local data are retained.',
@@ -152,10 +152,11 @@ function registerSetupUI(ctx, available) {
         const status = configured?.broker_url ? configured : await call('status', { broker_url });
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(status?.state)) { toast(statusMessage(status), 'warning'); return; }
         let replacement_confirmed = false;
-        if (status?.replacement_confirmation_required === true || kind === 'reauthorize' && status?.state === 'setup_needed') {
-          if (status?.replacement_confirmation_required === true && (typeof status.request_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(status.request_id))) throw Error('invalid_status');
-          phase = 'replacement_confirmation';
-          replacement_confirmed = await ctx.ui.dialog.confirm({ title: 'Replace Psst authorization?', message: `Broker: ${broker_url}. This creates a new approval request and, after approval and safe attachment, replaces the selected installation authorization with new credential-bound addresses. Old addresses will not become the new identity. Old local data is retained. This does not revoke the old credential; manual revocation in Psst admin is a separate human action. Existing access is retained where still valid. Continue?`, label: { confirm: 'Create new request', cancel: 'Keep existing' } }) === true;
+        if (status?.replacement_confirmation_required === true) {
+          if (typeof status.request_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(status.request_id)) throw Error('invalid_status');
+          phase = kind === 'reauthorize' ? 'preflight' : 'replacement_confirmation';
+          // The explicit native command supplies intent; keep the RPC request/revision fences.
+          replacement_confirmed = kind === 'reauthorize' || await ctx.ui.dialog.confirm({ title: 'Replace Psst authorization?', message: `Broker: ${broker_url}. This creates a new approval request and, after approval and safe attachment, replaces the selected installation authorization with new credential-bound addresses. Old addresses will not become the new identity. Old local data is retained. This does not revoke the old credential; manual revocation in Psst admin is a separate human action. Existing access is retained where still valid. Continue?`, label: { confirm: 'Create new request', cancel: 'Keep existing' } }) === true;
           verify();
           if (!replacement_confirmed) return;
         }
@@ -169,7 +170,7 @@ function registerSetupUI(ctx, available) {
       let message = error?.message === 'invalid_url'
         ? 'Enter an HTTPS broker origin only, without credentials, path, query or fragment.'
         : controller.signal.aborted || error?.message === 'selection_changed'
-          ? 'Psst action suspended. Return focus to the original chat, dismiss the old dialog, then use /psst-status. Reopen /psst-setup there if needed; confirmations must be given again. Other chats can stay open.'
+          ? 'Psst action suspended. Return focus to the original chat, dismiss the old dialog, then use /psst-status. Re-run the command there if needed; old dialogs cannot authorize a retry. Other chats can stay open.'
           : error?.message === 'local_unavailable'
             ? 'Setup requires a local TUI sharing the server private directory.'
             : 'Psst action could not complete. Check /psst-status before retrying; do not paste credentials.';
@@ -189,7 +190,7 @@ function registerSetupUI(ctx, available) {
   };
   ctx.keymap.layer(() => ({ mode: 'global', commands: [
     { id: 'psst-setup', title: 'Psst: Set up broker', group: 'Psst', palette: true, slash: { name: 'psst-setup' }, run: () => run('setup') },
-    { id: 'psst-reauthorize', title: 'Psst: Reauthorize (explicit HTTPS endpoint required)', description: 'Usage: /psst-reauthorize <https://broker.example.com>. No broker switching.', group: 'Psst', palette: true, slash: { name: 'psst-reauthorize', arguments: true }, run: input => run('reauthorize', input) },
+    { id: 'psst-reauthorize', title: 'Psst: Reauthorize (explicit HTTPS endpoint required)', description: 'Usage: /psst-reauthorize <https://broker.example.com>. Requests replacement without another confirmation; broker admin approval still required. No broker switching.', group: 'Psst', palette: true, slash: { name: 'psst-reauthorize', arguments: true }, run: input => run('reauthorize', input) },
     { id: 'psst-status', title: 'Psst: Check status', group: 'Psst', palette: true, slash: { name: 'psst-status' }, run: () => run('status') },
     { id: 'psst-cancel-setup', title: 'Psst: Pause setup', group: 'Psst', palette: true, slash: { name: 'psst-cancel-setup' }, run: () => run('cancel') },
   ] }));

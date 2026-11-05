@@ -17,15 +17,12 @@ It also fences actual conversation/location changes, including away-and-back.
   the durable request. If paused, `/psst-setup` with the same URL reconciles/resumes
   that request. A running owner retry returns its existing request without a
   second enrollment call. Never replay an old replacement confirmation.
-- `/psst-reauthorize <https-origin>` requires an explicit matching HTTPS broker origin before status inspection or replacement dispatch. Missing or malformed input shows usage without prompting; a configured-target mismatch is rejected without changing setup state. It uses the same context guards and saved candidate. Its native confirmation shows the broker origin and is bound to both the previous request and selected-installation revision. Reconnect is automatic reuse of the saved credential; reauthorization is a new human-approved candidate; revoke remains a separate human action in Psst admin. Neither an agent nor a peer message may silently substitute one action for another.
+- `/psst-reauthorize <https-origin>` requires an explicit matching HTTPS broker origin before status inspection or replacement dispatch. Missing or malformed input shows usage without prompting; a configured-target mismatch is rejected without changing setup state. It uses the same context guards and saved candidate. The explicit native command supplies replacement intent without another confirmation dialog, bound to both the previous request and selected-installation revision. Host permission enforcement and broker administrator approval remain in force. Reconnect is automatic reuse of the saved credential; reauthorization is a new human-approved candidate; revoke remains a separate human action in Psst admin. Neither an agent nor a peer message may silently substitute one action for another.
 - `request=not_submitted` means this action never called setup. It does not mean
   there was no earlier request. `saved` means a durable request identity exists,
   not proof that the broker has received or approved it. `unknown` means a reply
   was lost or persistence could not be established; inspect status before retry.
-- Setup owned elsewhere must be resumed in its original chat. Pausing a pending
-  request does not authorize a different conversation to adopt it. Existing
-  explicit replacement of a terminal authorization remains available with a
-  fresh confirmation bound to its exact request.
+- Setup owned elsewhere must be resumed in its original chat. Pausing a pending request does not authorize a different conversation to adopt it. Explicit replacement of a terminal authorization remains available through `/psst-reauthorize <https-origin>`, freshly bound to its exact request and selected revision.
 
 Warnings include only fixed phase/cause/request-state enums. Record those fields,
 host version, and whether the two chats were views of one TUI or independent

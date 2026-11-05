@@ -50,8 +50,16 @@ test('native reauthorization RPC checks endpoint without granting model replacem
  assert.deepEqual(readFileSync(join(directory,'installation.json')),oldSelection);
  await assert.rejects(()=>handlers.setup({...input,sessionID:'foreign'},context),/native_session_not_selected/);
  const matching={...input,broker_url:'https://fixture.invalid'};
+ const stale=await handlers.setup({...matching,selection_revision:'stale-revision'},context);
+ assert.equal(stale.state,'setup_blocked');assert.equal(begins,0);assert.equal(readPending(directory),null);
+ const changed=await handlers.setup({...matching,replacement_request_id:'changed'},context);
+ assert.equal(changed.replacement_confirmation_required,true);assert.equal(begins,0);
+ const cancelled=await handlers.setup(matching,{signal:AbortSignal.abort()});
+ assert.equal(cancelled.state,'setup_blocked');assert.equal(begins,0);assert.equal(readPending(directory),null);
  const unconfirmed=await handlers.setup({...matching,replacement_confirmed:false},context);
  assert.equal(unconfirmed.replacement_confirmation_required,true);assert.equal(begins,0);
+ const initialOnly=await f.tools.get('broker_setup').execute({broker_url:matching.broker_url},{sessionID:'one',signal:context.signal});
+ assert.equal(JSON.parse(initialOnly.content).replacement_confirmation_required,true);assert.equal(begins,0);
  const model=await f.tools.get('broker_setup').execute({broker_url:matching.broker_url,reauthorize:true},{sessionID:'one',signal:context.signal});
  assert.equal(JSON.parse(model.content).state,'setup_blocked');assert.equal(begins,0);
  assert.equal((await handlers.setup(matching,context)).request_id,'new');
@@ -59,6 +67,79 @@ test('native reauthorization RPC checks endpoint without granting model replacem
  await handlers.cancel({sessionID:'one'},context);assert.equal(readPending(directory).paused,true);
  assert.equal(readSelection(directory).connectionFile,connectionFile);
  assert.deepEqual(readFileSync(join(directory,'installation.json')),oldSelection);
+});
+
+test('native reauthorization command keeps RPC fences and recovers lost replies and failed attachment without dialogs', async t => {
+ const { mkdirSync, readFileSync } = await import('node:fs');
+ const { readPending, readSelection } = await import('../src/installation.mjs');
+ const { presenceDirectory } = await import('../src/active-presence.mjs');
+ const { SETUP_RPC } = await import('../src/setup-rpc.mjs');
+ const { default: tui } = await import('../plugin/tui.mjs');
+ const f = await fixture(t); await f.runtime.dispose();
+ const directory = f.options.setupOptions.directory, oldFile = candidateFile(f, 'old'), candidate = candidateFile(f);
+ mkdirSync(directory, { mode: 0o700, recursive: true });
+ writeFileSync(join(directory, 'installation.json'), JSON.stringify({ format: 'psst-opencode-installation-v1', revision: 'old-revision', connectionFile: oldFile }), { mode: 0o600 });
+ const selectionBefore = readFileSync(join(directory, 'installation.json')), tokenBefore = readFileSync(join(f.dir, 'old.token'));
+ let handlers, saved = { state: 'revoked', requestId: 'old' }, replacements = 0, failAttachment = false;
+ f.ctx.rpc = { register: async (definition, methods) => { assert.equal(definition, SETUP_RPC); handlers = methods; return { dispose: async () => {} }; } };
+ const runtime = await setupNativePlugin({ ...f.options, setupEnabled: true,
+  adapterFactory: args => {
+   const adapter = f.options.adapterFactory(args);
+   return { ...adapter, start: async metadata => { if (failAttachment) { failAttachment = false; throw Error('candidate_unavailable'); } await adapter.start(metadata); } };
+  },
+  setupOptions: { directory, loadHelper: async () => ({
+   readApprovalState: () => saved, pollApproval: async () => saved,
+   beginApproval: async options => {
+    if (options.replaceRequestId) { assert.equal(options.replaceRequestId, 'old'); replacements++; saved = { state: 'pending', requestId: 'new' }; }
+    return saved;
+   },
+  }) },
+ });
+ t.after(() => runtime.dispose());
+ await runtime.connect('one'); const original = runtime.status('one').client_id;
+ const oldJournal = f.states[0].client.inbox.directory, oldBinding = readFileSync(join(oldJournal, 'binding.json'));
+ const prior = process.env.PSST_OPENCODE_CONFIG_DIR;
+ process.env.PSST_OPENCODE_CONFIG_DIR = directory;
+ t.after(() => { if (prior === undefined) delete process.env.PSST_OPENCODE_CONFIG_DIR; else process.env.PSST_OPENCODE_CONFIG_DIR = prior; });
+ presenceDirectory(directory, f.ctx.location, { create: true });
+ let commands, denied = true, loseReply = true;
+ const toasts = [], setupInputs = [];
+ const stop = tui.setup({ app: f.ctx.app, location: f.ctx.location,
+  storage: { memory: (_key, { initial }) => [initial, mutate => mutate(initial)] },
+  keymap: { layer: factory => { commands = factory().commands; } },
+  ui: { router: { current: () => ({ type: 'session', sessionID: 'one' }) }, toast: { show: toast => toasts.push(toast) },
+   dialog: { prompt: () => assert.fail('Explicit endpoint needs no prompt'), confirm: () => assert.fail('Command intent needs no confirmation') } },
+  client: { rpc: definition => {
+   assert.equal(definition, SETUP_RPC);
+   return Object.fromEntries(['status', 'setup', 'cancel'].map(name => [name, async (input, options) => {
+    if (denied && name === 'setup') throw Error('host_permission_denied');
+    if (name === 'setup') setupInputs.push(input);
+    const result = await handlers[name](input, { signal: options.signal });
+    if (name === 'setup' && loseReply) { loseReply = false; throw Error('reply_lost'); }
+    return result;
+   }]));
+  } },
+ });
+ t.after(stop);
+ const reauthorize = () => commands.find(command => command.id === 'psst-reauthorize').run('https://fixture.invalid');
+ await reauthorize(); assert.equal(replacements, 0); assert.equal(readPending(directory), null);
+ denied = false;
+ await reauthorize(); assert.equal(replacements, 1); assert.match(toasts.at(-1).message, /request=unknown/);
+ assert.equal(setupInputs[0].replacement_request_id, 'old'); assert.equal(setupInputs[0].selection_revision, 'old-revision');
+ assert.equal(setupInputs[0].replacement_confirmed, true);
+ await reauthorize(); assert.equal(replacements, 1); assert.equal(readPending(directory).requestId, 'new');
+ assert.equal(setupInputs.at(-1).replacement_confirmed, undefined);
+ assert.deepEqual(readFileSync(join(directory, 'installation.json')), selectionBefore);
+ await commands.find(command => command.id === 'psst-cancel-setup').run(); assert.equal(readPending(directory).paused, true);
+ saved = { state: 'approved', requestId: 'new', connectionFile: candidate }; failAttachment = true;
+ await reauthorize(); assert.equal(runtime.status('one').client_id, original); assert.equal(readPending(directory).paused, true);
+ assert.deepEqual(readFileSync(join(directory, 'installation.json')), selectionBefore);
+ assert.match(toasts.at(-1).message, /approved candidate is not connected yet/);
+ await reauthorize(); assert.equal(replacements, 1); assert.equal(readSelection(directory).connectionFile, candidate);
+ assert.notEqual(runtime.status('one').client_id, original); assert.equal(runtime.status('one').connected, true);
+ assert.equal(readPending(directory).requestId, 'new');
+ assert.deepEqual(readFileSync(join(f.dir, 'old.token')), tokenBefore);
+ assert.deepEqual(readFileSync(join(oldJournal, 'binding.json')), oldBinding);
 });
 
 test('OpenCode durable native tool-call ID is private and replay stable, distinct calls are distinct',async t=>{

@@ -28,13 +28,9 @@ Run `/psst-reauthorize <https-origin>` with an explicit HTTPS broker origin; a s
 
 OpenCode 2.2.5 supports `slash: { name, arguments: true }` and `run(input?: string)` in native keymap commands. The host's prompt dispatcher consumes these argument-bearing commands before normal model dispatch; no model-turn gate is needed. Palette/keyboard invocations without input show usage. The interface and dispatch were checked against the pinned [TUI context](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/plugin/src/tui/context.ts), [prompt dispatch](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/tui/src/component/prompt/index.tsx) and [host argument test](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/tui/test/cli/tui/keymap-arguments.test.tsx). This source inspection is not a real-host execution result.
 
-The native dialog asks before replacing a terminal request and fences that
-confirmation to its exact request ID. Model tools cannot supply this confirmation.
-The prior authorization remains selected and usable until the approved candidate
-has attached and the original selection revision still matches. Cancellation,
-late results, failed attachment or an intervening selection cannot promote it.
-Retrying an approved but uncommitted candidate reuses its receipt and original
-selection baseline rather than silently replacing a newer choice.
+A valid `/psst-reauthorize <https-origin>` invocation supplies replacement intent without another target or replacement confirmation dialog. The native RPC binds that intent to the exact previous request ID and selected-installation revision; the existing `replacement_confirmed` wire field carries this intent, not evidence of a second dialog. `/psst-setup` retains its terminal-replacement confirmation. Model-facing tools remain URL-only and cannot supply native command intent or replacement fences. Host-owned permissions and broker administrator approval still apply.
+
+The prior authorization remains selected and usable until the approved candidate has attached and the original selection revision still matches. Cancellation, late results, failed attachment or an intervening selection cannot promote it. Retrying an approved but uncommitted candidate reuses its receipt and original selection baseline rather than silently replacing a newer choice.
 
 An explicit replacement creates a new credential-bound identity. It retains the
 old authorization's local inbox and history, but does not move unread messages or
