@@ -325,7 +325,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
                 const info = await state.verify();
                 if (!info || context.signal.aborted || operationSignal.aborted) throw new Error('native_session_mismatch');
                 return { content: display({ client_id: state.inbox.identity.client_id, client_type: state.inbox.identity.client_type,
-                  native_session_id: context.sessionID, metadata: nativeMetadata(info, { ...state.settings, ...metadataOptions }),
+                  native_session_id: context.sessionID, metadata: nativeMetadata(info, { ...state.settings, ...metadataOptions }, process.env, state.inbox.identity.client_id),
                   pending_count: state.inbox.stats().pending_count }) };
               }
               let operationStartedAt;

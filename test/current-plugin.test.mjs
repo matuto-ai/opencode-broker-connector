@@ -267,7 +267,8 @@ test('broker_identity reads only the verified conversation and preserves its inb
  const one=await invoke('one'),two=await invoke('two');
  assert.equal(one.client_type,'opencode');assert.equal(one.native_session_id,'one');assert.equal(one.pending_count,0);
  assert.equal(one.client_id,f.runtime.status('one').client_id);assert.notEqual(one.client_id,two.client_id);
- assert.deepEqual(one.metadata,{name:'OpenCode',project:f.dir.split('/').at(-1),model:{provider:null,id:null,source:'unknown'}});
+ assert.equal(typeof one.metadata.name,'string');assert.equal(one.metadata.project,f.dir.split('/').at(-1));
+ assert.deepEqual(one.metadata.model,{provider:null,id:null,source:'unknown'});
  const inbox=f.states[0].client.inbox,now=Date.now();
  const envelope={protocol_version:'1',message_id:randomUUID(),recipient_id:one.client_id,recipient_sequence:1,
   sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
