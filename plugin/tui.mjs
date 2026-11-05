@@ -40,30 +40,32 @@ const stateMessages = {
   setup_needed: 'Enter your broker URL with /psst-setup.',
   pending: 'Waiting for human approval in the broker admin UI. Use /psst-status to check.',
   approved: 'Broker authorization approved.',
-  denied: 'The approval request was denied. A new request requires confirmation in /psst-reauthorize.',
-  expired: 'The approval request expired. A new request requires confirmation in /psst-reauthorize.',
-  revoked: 'The authorization was revoked. A new request requires confirmation in /psst-reauthorize.',
+  denied: 'The approval request was denied. A new request requires confirmation in /psst-reauthorize <https-origin>.',
+  expired: 'The approval request expired. A new request requires confirmation in /psst-reauthorize <https-origin>.',
+  revoked: 'The authorization was revoked. A new request requires confirmation in /psst-reauthorize <https-origin>.',
   paused: 'Local setup is paused. Existing authorization and local data are retained.',
   setup_blocked: 'Setup could not continue. Check /psst-status before retrying.',
   setup_owner_recovery_required: 'Setup ownership needs recovery. Existing authorization and local data are retained.',
   setup_owned_elsewhere: 'Setup belongs to another chat. Return to that chat and use /psst-status; do not close other chats or reset setup.',
 };
 function brokerOrigin(value) {
-  if (typeof value !== 'string' || value.length > 2048 || /[\s\x00-\x1f\x7f-\x9f]/u.test(value)) throw Error('invalid_url');
+  if (typeof value !== 'string' || value.length > 2048 || !/^https:\/\/[^/?#\\]+\/?$/i.test(value) || /[\s\x00-\x1f\x7f-\x9f]/u.test(value)) throw Error('invalid_url');
   let url;
   try { url = new URL(value); } catch { throw Error('invalid_url'); }
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash || url.pathname !== '/') throw Error('invalid_url');
   return url.origin;
 }
+const ENDPOINT_MISMATCH = 'Broker endpoint does not match the configured broker. Broker switching is not supported; no setup request was submitted.';
 function statusMessage(result) {
+  if (result?.code === 'broker_endpoint_mismatch') return ENDPOINT_MISMATCH;
   // Never render exception strings or arbitrary server fields, including paths,
   // credentials and terminal controls. Public approval URLs have one fixed path.
   const setupMessage = stateMessages[result?.state];
   let message = result?.connected === true
     ? 'Psst is connected for this selected chat.' + (setupMessage && result.state !== 'setup_needed' ? ` Existing connection stays active. Setup: ${setupMessage}` : '')
     : setupMessage ?? 'Psst is not connected. Use /psst-setup to configure it.';
-  if (result?.authorization_state === 'expired') message = 'The current authorization expired. Use /psst-reauthorize for an explicitly approved replacement. Existing local data is retained.';
-  if (result?.authorization_state === 'rejected') message = 'The broker rejected the current authorization. Use /psst-reauthorize for an explicitly approved replacement. Existing local data is retained.';
+  if (result?.authorization_state === 'expired') message = 'The current authorization expired. Use /psst-reauthorize <https-origin> for an explicitly approved replacement. Existing local data is retained.';
+  if (result?.authorization_state === 'rejected') message = 'The broker rejected the current authorization. Use /psst-reauthorize <https-origin> for an explicitly approved replacement. Existing local data is retained.';
   const approvedCandidate = result?.state === 'approved'
     || ['paused', 'setup_blocked'].includes(result?.state) && result?.request_state === 'approved';
   if (approvedCandidate && (result?.candidate_selected !== true || result?.connected !== true)) message += ' The approved candidate is not connected yet.' + (result?.candidate_selected !== true ? ' Its attachment has not been committed.' : '');
@@ -90,8 +92,13 @@ function registerSetupUI(ctx, available) {
     if (route?.type !== 'session' || typeof route.sessionID !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(route.sessionID) || !ctx.location) throw Error('selection_changed');
     return { sessionID: route.sessionID, directory: ctx.location.directory, workspaceID: ctx.location.workspaceID };
   };
-  const run = async kind => {
+  const run = async (kind, input) => {
     if (disposed) return;
+    let endpoint;
+    if (kind === 'reauthorize') {
+      try { endpoint = brokerOrigin(input); }
+      catch { toast('Usage: /psst-reauthorize <https://broker.example.com> — supply the broker HTTPS origin explicitly, without credentials, path, query or fragment. No setup request was submitted.', 'warning'); return; }
+    }
     if (active) { toast('Finish or dismiss the current Psst dialog first.', 'warning'); return; }
     const controller = new AbortController();
     const configuring = kind === 'setup' || kind === 'reauthorize';
@@ -136,8 +143,9 @@ function registerSetupUI(ctx, available) {
       if (configuring) {
         const configured = await call('status', {});
         if (['setup_owned_elsewhere', 'setup_owner_recovery_required', 'setup_blocked'].includes(configured?.state)) { toast(statusMessage(configured), 'warning'); return; }
+        if (endpoint && configured?.broker_url && brokerOrigin(configured.broker_url) !== endpoint) { toast(ENDPOINT_MISMATCH, 'warning'); return; }
         phase = 'url_prompt';
-        const value = configured?.broker_url ?? await ctx.ui.dialog.prompt({ title: kind === 'reauthorize' ? 'Reauthorize Psst: broker URL' : 'Set up Psst', description: 'Enter only your HTTPS broker URL. Approval happens in the broker admin UI; never paste a token or credential.', placeholder: 'https://broker.example.com' });
+        const value = endpoint ?? configured?.broker_url ?? await ctx.ui.dialog.prompt({ title: 'Set up Psst', description: 'Enter only your HTTPS broker URL. Approval happens in the broker admin UI; never paste a token or credential.', placeholder: 'https://broker.example.com' });
         if (value === undefined) return;
         verify();
         const broker_url = brokerOrigin(value);
@@ -152,6 +160,7 @@ function registerSetupUI(ctx, available) {
           if (!replacement_confirmed) return;
         }
         const result = await call('setup', { broker_url,
+          ...(kind === 'reauthorize' ? { reauthorize: true } : {}),
           ...(Object.hasOwn(status ?? {}, 'selection_revision') ? { selection_revision: status.selection_revision } : {}),
           ...(replacement_confirmed && status?.replacement_confirmation_required === true ? { replacement_confirmed: true, replacement_request_id: status.request_id } : {}) });
         toast(statusMessage(result));
@@ -180,7 +189,7 @@ function registerSetupUI(ctx, available) {
   };
   ctx.keymap.layer(() => ({ mode: 'global', commands: [
     { id: 'psst-setup', title: 'Psst: Set up broker', group: 'Psst', palette: true, slash: { name: 'psst-setup' }, run: () => run('setup') },
-    { id: 'psst-reauthorize', title: 'Psst: Request replacement authorization', group: 'Psst', palette: true, slash: { name: 'psst-reauthorize' }, run: () => run('reauthorize') },
+    { id: 'psst-reauthorize', title: 'Psst: Reauthorize (explicit HTTPS endpoint required)', description: 'Usage: /psst-reauthorize <https://broker.example.com>. No broker switching.', group: 'Psst', palette: true, slash: { name: 'psst-reauthorize', arguments: true }, run: input => run('reauthorize', input) },
     { id: 'psst-status', title: 'Psst: Check status', group: 'Psst', palette: true, slash: { name: 'psst-status' }, run: () => run('status') },
     { id: 'psst-cancel-setup', title: 'Psst: Pause setup', group: 'Psst', palette: true, slash: { name: 'psst-cancel-setup' }, run: () => run('cancel') },
   ] }));

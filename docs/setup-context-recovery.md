@@ -17,12 +17,7 @@ It also fences actual conversation/location changes, including away-and-back.
   the durable request. If paused, `/psst-setup` with the same URL reconciles/resumes
   that request. A running owner retry returns its existing request without a
   second enrollment call. Never replay an old replacement confirmation.
-- `/psst-reauthorize` uses the same context guards and saved candidate. Its native
-  confirmation shows the broker origin and is bound to both the previous request
-  and selected-installation revision. Reconnect is automatic reuse of the saved
-  credential; reauthorization is a new human-approved candidate; revoke remains
-  a separate human action in Psst admin. Neither an agent nor a peer message may
-  silently substitute one action for another.
+- `/psst-reauthorize <https-origin>` requires an explicit matching HTTPS broker origin before status inspection or replacement dispatch. Missing or malformed input shows usage without prompting; a configured-target mismatch is rejected without changing setup state. It uses the same context guards and saved candidate. Its native confirmation shows the broker origin and is bound to both the previous request and selected-installation revision. Reconnect is automatic reuse of the saved credential; reauthorization is a new human-approved candidate; revoke remains a separate human action in Psst admin. Neither an agent nor a peer message may silently substitute one action for another.
 - `request=not_submitted` means this action never called setup. It does not mean
   there was no earlier request. `saved` means a durable request identity exists,
   not proof that the broker has received or approved it. `unknown` means a reply

@@ -24,6 +24,10 @@ flow; selection changes alone cannot retry them. Explicit setup is required.
 
 ## Replacement and recovery
 
+Run `/psst-reauthorize <https-origin>` with an explicit HTTPS broker origin; a saved origin never fills a missing argument. Missing or malformed input returns usage before any status RPC or enrollment. A different configured broker is rejected before replacement. The server repeats the target check against pending and selected configuration before setup writes, including after asynchronous preflight; rejected invocations preserve the existing request, selection, credentials and unread data.
+
+OpenCode 2.2.5 supports `slash: { name, arguments: true }` and `run(input?: string)` in native keymap commands. The host's prompt dispatcher consumes these argument-bearing commands before normal model dispatch; no model-turn gate is needed. Palette/keyboard invocations without input show usage. The interface and dispatch were checked against the pinned [TUI context](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/plugin/src/tui/context.ts), [prompt dispatch](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/tui/src/component/prompt/index.tsx) and [host argument test](https://github.com/anomalyco/opencode/blob/v2.2.5/packages/tui/test/cli/tui/keymap-arguments.test.tsx). This source inspection is not a real-host execution result.
+
 The native dialog asks before replacing a terminal request and fences that
 confirmation to its exact request ID. Model tools cannot supply this confirmation.
 The prior authorization remains selected and usable until the approved candidate
