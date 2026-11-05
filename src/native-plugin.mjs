@@ -1,11 +1,12 @@
 import packageInfo from '../package.json' with { type: 'json' };
 import { nativeMetadata } from './native-metadata.mjs';
+import { inspectStorage } from './doctor.mjs';
 import { createPresenceReader, presenceDirectory } from './active-presence.mjs';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { createOpenCodeAdapter, nativeToolDefinitions } from './opencode-adapter.mjs';
-import { createNativeDelivery, nativeSessionBinding, HOST_VERSION } from './native-delivery.mjs';
+import { createNativeDelivery, nativeSessionBinding, HOST_VERSION, DELIVERY_PAUSE_EVENTS } from './native-delivery.mjs';
 import { openNativeIncarnation } from './native-incarnation.mjs';
 import { openNativeInbox } from './native-inbox.mjs';
 import { withNativeLock } from './native-lock.mjs';
@@ -29,10 +30,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     || typeof ctx?.storage?.get !== 'function' || typeof ctx?.storage?.set !== 'function' || typeof ctx?.storage?.scan !== 'function'
     || typeof ctx?.tool?.transform !== 'function' || typeof ctx?.event?.subscribe !== 'function') throw new Error('psst_host_capability_unavailable');
   const directory = realpathSync(ctx.location.directory);
-  let authorizationExpired = false;
+  let authorizationExpired = false, diagnosticSettings;
   const readCurrentSettings = async options => {
-    try { const settings = await loadSettings(options); authorizationExpired = settings?.authorizationExpired === true; return settings; }
-    catch (error) { if (error.code === 'credential_expired') authorizationExpired = true; throw error; }
+    try { const settings = await loadSettings(options); diagnosticSettings = settings; authorizationExpired = settings?.authorizationExpired === true; return settings; }
+    catch (error) { diagnosticSettings = undefined; if (error.code === 'credential_expired') authorizationExpired = true; throw error; }
   };
   const hostID = await withNativeLock(setupOptions.directory ?? installationDirectory(), 'host-anchor', async () => {
     const settings = await readCurrentSettings({ identityRecovery: setupEnabled });
@@ -41,7 +42,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   });
   const registryPrefix = 'psst-v2-session:' + createHash('sha256').update(canonical({ directory, workspaceID: ctx.location.workspaceID ?? null })).digest('hex') + ':';
   if (!validID(hostID)) throw new Error('psst_host_binding_unavailable');
-  const sessions = new Map(), preparing = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), transportBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
+  const sessions = new Map(), preparing = new Map(), deliveryEvents = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), transportBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
   let disposed = false, closing, events, setup, presenceTimer, synchronizing;
   const presence = presenceFactory({ directory: presenceDirectory(setupOptions.directory ?? installationDirectory(), ctx.location, { create: true }) });
   const selected = sessionID => { try { return presence.selected().has(sessionID); } catch { return false; } };
@@ -86,6 +87,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     state.starting = (async () => {
       const info = await getInfo(sessionID, state.controller.signal);
       const nativeBinding = nativeSessionBinding(info, hostID);
+      state.info = info;
       const settings = candidateSettings ?? await readCurrentSettings();
       state.settings = settings;
       if (!settings || disposed || blocked.has(sessionID) || disconnected.has(sessionID) || state.controller.signal.aborted) throw new Error('psst_connect_required');
@@ -95,9 +97,12 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           || settings.enrollment && Date.parse(settings.enrollment.expiresAt) <= Date.now()) return null;
         try {
           const now = await getInfo(sessionID, state.controller.signal);
-          return selected(sessionID) && !state.controller.signal.aborted && canonical(nativeSessionBinding(now, hostID)) === canonical(nativeBinding) ? now : null;
+          if (!selected(sessionID) || state.controller.signal.aborted || canonical(nativeSessionBinding(now, hostID)) !== canonical(nativeBinding)) return null;
+          state.info = now;
+          return now;
         } catch { return null; }
       };
+      state.verify = valid;
       assertExistingBinding(settings, nativeBinding);
       state.incarnation = settings.broker.registrationVersion === 2 ? openNativeIncarnation({ reference, settings, binding: nativeBinding }) : null;
       state.inbox = state.incarnation?.inbox ?? openNativeInbox({ reference, settings, binding: nativeBinding });
@@ -108,7 +113,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       const binding = { sessionID, directory, worktree: directory, lifetime: state.lifetime, signal: state.controller.signal };
       state.adapter = adapterFactory({ reference, tool, client: state.client, binding,
         currentBinding: async () => await valid() ? binding : null, closeSessionOnStop: false,
-        observeMetadata: async () => { const current = await valid(); if (!current) return null; const metadata = nativeMetadata(current, { ...settings, ...metadataOptions });
+        observeMetadata: async () => { const current = await valid(); if (!current) return null; const metadata = nativeMetadata(current, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id);
           return canonical(metadata) === canonical(state.inbox.getState('metadata')) ? null : metadata; },
         operationContext: context => ({ operationId: canonical({ hostID, sessionID, messageID: context.messageID, callID: context.callID }), operationStartedAt: context.operationStartedAt }),
         onHealthChange: health => {
@@ -120,10 +125,12 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           if (entry.code === 'native_binding_unavailable') queueMicrotask(() => void close(sessionID, state).catch(() => {}));
           if (sessions.get(sessionID) === state && ['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) authorizationBlocked.set(sessionID, entry.code);
         } });
-      await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions }));
+      await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id));
       if (!await valid()) throw new Error('native_session_mismatch');
       state.delivery = deliveryFactory({ session: ctx.session, client: state.client, inbox: state.inbox, binding: nativeBinding,
         signal: state.controller.signal, verify: valid, available: () => sessions.get(sessionID) === state && selected(sessionID) && !transportBlocked.has(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
+      const observed = deliveryEvents.get(sessionID);
+      if (observed?.type) state.delivery.event({ type: observed.type, data: { sessionID } });
       if (!candidateSettings) state.delivery.start();
       return state;
     })();
@@ -146,12 +153,21 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   function connectionCommand(kind, { sessionID }, context) {
     if (!validID(sessionID) || !selected(sessionID) || !(context?.signal instanceof AbortSignal) || context.signal.aborted || disposed)
       return Promise.reject(new Error('native_session_not_selected'));
+    const resumeRevision = deliveryEvents.get(sessionID)?.revision ?? 0;
     const previous = connectionCommands.get(sessionID);
     if (previous && kind === 'connect') return Promise.reject(new Error('native_connection_busy'));
     const command = { controller: new AbortController() };
     previous?.controller.abort();
     connectionCommands.set(sessionID, command);
     const signal = AbortSignal.any([context.signal, command.controller.signal, controller.signal]);
+    const resumeDelivery = async state => {
+      const resumed = await state.delivery.resume?.({ signal,
+        permitted: () => !signal.aborted && selected(sessionID) && sessions.get(sessionID) === state
+          && (deliveryEvents.get(sessionID)?.revision ?? 0) === resumeRevision });
+      if ((deliveryEvents.get(sessionID)?.revision ?? 0) !== resumeRevision) return false;
+      if (resumed === true) deliveryEvents.set(sessionID, { revision: resumeRevision, type: null });
+      return resumed;
+    };
     command.promise = (async () => {
       await previous?.promise.catch(() => {});
       await getInfo(sessionID, signal);
@@ -172,7 +188,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         return status(sessionID);
       }
       const current = sessions.get(sessionID);
-      if (current?.delivery && !current.controller.signal.aborted) return status(sessionID);
+      if (current?.delivery && !current.controller.signal.aborted) {
+        const resumed = await resumeDelivery(current);
+        return { ...status(sessionID), delivery_resumed: resumed };
+      }
       const wasDisconnected = disconnected.delete(sessionID);
       const abort = () => sessions.get(sessionID)?.controller.abort();
       signal.addEventListener('abort', abort, { once: true });
@@ -186,7 +205,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         if (signal.aborted || !selected(sessionID)) throw new Error('native_session_not_selected');
         const state = await connect(sessionID);
         if (signal.aborted || !selected(sessionID) || state.controller.signal.aborted) throw new Error('native_session_not_selected');
-        return status(sessionID);
+        const resumed = await resumeDelivery(state);
+        return { ...status(sessionID), delivery_resumed: resumed };
       } catch (error) {
         if (wasDisconnected) disconnected.add(sessionID);
         await close(sessionID);
@@ -227,7 +247,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     if (previous) await close(sessionID, previous);
     return candidate;
   }
-  const catalog = nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive');
+  const catalog = [...nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive'), {
+    name: 'broker_identity', description: 'Read this exact selected OpenCode conversation address, descriptive metadata and pending-message count. Use the full client ID for replies; labels are not routing authority. Never enrolls or acknowledges messages.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  }];
   function dispose() {
     if (closing) return closing;
     // Every caller joins the same drain, including shutdown triggered by the
@@ -250,7 +273,15 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     const transport = transportBlocked.get(sessionID) ?? state?.adapter?.status?.() ?? state?.transportStatus ?? null;
     const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
+    let metadata = null, pendingCount = null, delivery = { paused: null, pause_reason: null };
+    if (state?.delivery && !state.controller.signal.aborted) {
+      try { metadata = nativeMetadata(state.info, { ...state.settings, ...metadataOptions }, process.env, state.inbox.identity.client_id); } catch {}
+      try { pendingCount = state.inbox.stats().pending_count; delivery = state.delivery.status?.(state.info) ?? delivery; }
+      catch { delivery = { paused: true, pause_reason: 'storage_unavailable' }; }
+    }
     return { connector_version: packageInfo.version, host_version: HOST_VERSION, mode: 'native_automatic',
+      node_version: process.versions.node, metadata, pending_count: pendingCount,
+      delivery_paused: delivery.paused, delivery_pause_reason: delivery.pause_reason,
       connected: !disposed && !state?.controller.signal.aborted && !!state?.delivery && selected(sessionID) && authorization === 'active'
         && (!transport || transport.reception === 'healthy' && transport.heartbeat !== 'unreachable' && transport.recovery === 'idle'),
       transport,
@@ -290,8 +321,22 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         }); } catch (error) { return setup.failure(error, input.sessionID); }
       };
       registrations.push(await ctx.rpc.register(SETUP_RPC, {
-        status: (input, context) => invoke('broker_setup_status', input, context),
+        status: async (input, context) => {
+          if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          const state = sessions.get(input.sessionID);
+          if (state && !await state.verify?.()) throw new Error('native_session_mismatch');
+          if (context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          return invoke('broker_setup_status', input, context);
+        },
         setup: (input, context) => invoke('broker_setup', input, context),
+        doctor: async (input, context) => {
+          if (!(context?.signal instanceof AbortSignal) || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          await getInfo(input.sessionID, context.signal);
+          if (context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          return { connector_version: packageInfo.version, host_version: HOST_VERSION, node_version: process.versions.node,
+            checks: inspectStorage({ installation: setupOptions.directory ?? installationDirectory(),
+              stateDirectory: diagnosticSettings?.stateDirectory, tokenFile: diagnosticSettings?.broker?.tokenFile }) };
+        },
         cancel: (input, context) => invoke('broker_cancel_setup', input, context),
         connect: (input, context) => connectionCommand('connect', input, context),
         disconnect: (input, context) => connectionCommand('disconnect', input, context),
@@ -318,6 +363,13 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
             try {
               if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !validID(context.messageID) || !validID(context.id)) throw new Error('native_session_mismatch');
               const state = await connect(context.sessionID);
+              if (definition.name === 'broker_identity') {
+                const info = await state.verify();
+                if (!info || context.signal.aborted || operationSignal.aborted) throw new Error('native_session_mismatch');
+                return { content: display({ client_id: state.inbox.identity.client_id, client_type: state.inbox.identity.client_type,
+                  native_session_id: context.sessionID, metadata: nativeMetadata(info, { ...state.settings, ...metadataOptions }, process.env, state.inbox.identity.client_id),
+                  pending_count: state.inbox.stats().pending_count }) };
+              }
               let operationStartedAt;
               if (['broker_send', 'broker_resend'].includes(definition.name)) {
                 const bounded = AbortSignal.any([context.signal, operationSignal, controller.signal, AbortSignal.timeout(2000)]);
@@ -346,6 +398,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         if (event.type === 'location.shutdown' && event.location?.directory === directory) { void dispose(); break; }
         const sessionID = event.data?.sessionID;
         setup?.event(event);
+        if (DELIVERY_PAUSE_EVENTS.includes(event.type) || event.type === 'session.execution.started')
+          deliveryEvents.set(sessionID, { revision: (deliveryEvents.get(sessionID)?.revision ?? 0) + 1, type: event.type });
         const state = sessions.get(sessionID);
         state?.delivery?.event(event);
         if (['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {

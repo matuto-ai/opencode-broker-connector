@@ -28,7 +28,7 @@ async function fixture(t) {
   const directory = mkdtempSync(join(tmpdir(), 'opencode-recovery-')), time = clock(), stored = new Map(), calls = [], admissions = [], hooks = new Map();
   let poll, state, client, transport, plugin, loseCompletion = false, terminal, alive = true;
   const broker = { online: true, stale: false, reconcileFailures: 0 };
-  const binding = { id: 'one', projectID: 'project', location: { directory }, time: { created: 1 } };
+  const binding = { id: 'one', title: 'Recovery chat', projectID: 'project', location: { directory }, time: { created: 1 } };
   const ctx = { app: { version: '2.2.5' }, location: { directory },
     storage: { get: async key => stored.get(key), set: async (key, value) => stored.set(key, value), scan: async ({ prefix }) => ({ entries: [...stored].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value })) }) },
     session: { get: async () => alive ? binding : { ...binding, time: { created: 2 } },
@@ -112,7 +112,12 @@ test('OpenCode outage/return exhausts one round then restores the same session a
   assert.equal(f.admissions[0].metadata.broker_message_id, envelope.message_id);
   assert.equal(f.admissions[0].delivery, 'queue'); assert.equal(count(f, '/complete'), 1);
   assert.equal(f.calls.some(call => /\/ack|\/messages$/.test(call.path)), false, 'no read ACK or automatic reply');
-  assert.equal(f.plugin.status('one').connected, true); assert.equal(f.plugin.status('one').transport.error_code, null);
+  const recovered = f.plugin.status('one');
+  assert.equal(recovered.connected, true); assert.equal(recovered.transport.error_code, null);
+  assert.equal(recovered.node_version, process.versions.node);
+  assert.equal(recovered.metadata.name, `Recovery chat [${identity.client_id.slice(0, 8)}]`);
+  assert.equal(f.client.inbox.getState('metadata').name, recovered.metadata.name);
+  assert.equal(recovered.pending_count, 0); assert.equal(recovered.delivery_paused, false);
 });
 
 test('receive-only interruption reuses the pending claim identity, deduplicates lost completion and leaves ordinary long polls healthy', async t => {
@@ -137,6 +142,9 @@ test('explicit human delivery pauses survive automatic transport recovery', asyn
   f.poll().reject(failure()); await flush(); await f.time.advance(60000); await f.time.advance(1000);
   f.poll().resolve(f.claim(f.envelope())); await flush(); await f.native.delivery.tick();
   assert.equal(f.admissions.length, 0); assert.equal(f.plugin.status('one').transport.reception, 'healthy');
+  assert.equal(f.plugin.status('one').delivery_paused, true);
+  assert.equal(f.plugin.status('one').delivery_pause_reason, 'session.execution.interrupted');
+  assert.equal(f.plugin.status('one').pending_count, 1);
   f.native.delivery.event({ type: 'session.execution.started', data: { sessionID: 'one' } });
   await f.native.delivery.tick(); assert.equal(f.admissions.length, 1);
 });

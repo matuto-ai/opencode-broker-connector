@@ -145,7 +145,7 @@ test('explicit reconnect cannot lift unknown disabled-session tombstones', async
 });
 
 test('OpenCode registers automatic-only lifecycle tools, preserves drafts and isolates native session identities',async t=>{
- const f=await fixture(t);assert.equal(f.tools.size,8);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
+ const f=await fixture(t);assert.equal(f.tools.size,9);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
  const prompt={sessionID:'one',messageID:'human',prompt:{text:'keep my draft'}};await f.hooks.get('prompt')(prompt);await f.runtime.connect('one');await f.runtime.connect('two');assert.equal(f.states.length,2);assert.notEqual(f.states[0].identity.client_id,f.states[1].identity.client_id);assert.equal(prompt.prompt.text,'keep my draft');
 });
 test('native reauthorization RPC checks endpoint without granting model replacement authority',async t=>{
@@ -261,6 +261,36 @@ test('native reauthorization command keeps RPC fences and recovers lost replies 
  assert.deepEqual(readFileSync(join(oldJournal, 'binding.json')), oldBinding);
 });
 
+test('broker_identity reads only the verified conversation and preserves its inbox', async t => {
+ const f=await fixture(t),signal=new AbortController().signal;
+ const invoke=sessionID=>f.tools.get('broker_identity').execute({}, {sessionID,messageID:'msg',id:'identity',signal}).then(result=>JSON.parse(result.content));
+ const one=await invoke('one'),two=await invoke('two');
+ assert.equal(one.client_type,'opencode');assert.equal(one.native_session_id,'one');assert.equal(one.pending_count,0);
+ assert.equal(one.client_id,f.runtime.status('one').client_id);assert.notEqual(one.client_id,two.client_id);
+ assert.equal(typeof one.metadata.name,'string');assert.equal(one.metadata.project,f.dir.split('/').at(-1));
+ assert.deepEqual(one.metadata.model,{provider:null,id:null,source:'unknown'});
+ const inbox=f.states[0].client.inbox,now=Date.now();
+ const envelope={protocol_version:'1',message_id:randomUUID(),recipient_id:one.client_id,recipient_sequence:1,
+  sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
+  origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'Do not consume this message.'},
+  accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null};
+ inbox.accept(envelope);
+ assert.deepEqual(await invoke('one'),{...one,pending_count:1});assert.deepEqual(inbox.head().envelope,envelope);
+ assert.doesNotMatch(JSON.stringify(one),/token|stateDirectory|receipt|session_instance_id/);
+});
+
+test('broker_identity rejects cancellation, changed native identity and explicit disconnect', async t => {
+ const f=await fixture(t),definition=f.tools.get('broker_identity');
+ const invoke=signal=>definition.execute({}, {sessionID:'one',messageID:'msg',id:'identity',signal}).then(result=>JSON.parse(result.content));
+ assert.equal((await invoke(AbortSignal.abort())).error.code,'session_mismatch');assert.equal(f.states.length,0);
+ await f.runtime.connect('one');
+ f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'changed',location:{directory:f.dir},time:{created:2}});
+ const changed=await invoke(new AbortController().signal);assert.equal(changed.error.code,'session_mismatch');assert.equal(changed.client_id,undefined);
+ f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:f.dir},time:{created:1}});
+ await f.rpc().disconnect({sessionID:'one'},{signal:new AbortController().signal});
+ assert.equal((await invoke(new AbortController().signal)).error.code,'session_mismatch');
+});
+
 test('OpenCode durable native tool-call ID is private and replay stable, distinct calls are distinct',async t=>{
  const f=await fixture(t),invoke=async id=>JSON.parse((await f.tools.get('broker_send').execute({}, {sessionID:'one',messageID:'msg',id,signal:new AbortController().signal})).content);
  const a=await invoke('call1'),b=await invoke('call1'),c=await invoke('call2');assert.equal(a.operation.operationId,b.operation.operationId);assert.notEqual(a.operation.operationId,c.operation.operationId);
@@ -271,6 +301,23 @@ test('OpenCode reload reopens same exact broker inbox identity; owner conflicts 
  assert.throws(()=>openNativeInbox({reference,settings:f.settings,binding}),{code:'owner_conflict'});
  await f.runtime.dispose();const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());await runtime.connect('one');assert.deepEqual(f.states.at(-1).identity,original);
 });
+test('native titles distinguish equal-name conversations and rename metadata without rotating the mailbox', async t => {
+ const f=await fixture(t);await f.runtime.dispose();const observers=new Map(),initial=new Map();let title='Review';
+ const get=f.ctx.session.get;f.ctx.session.get=async args=>({...await get(args),title});
+ const options={...f.options,adapterFactory:args=>{
+  const adapter=f.options.adapterFactory(args);observers.set(args.binding.sessionID,args.observeMetadata);
+  return{...adapter,start:async metadata=>{initial.set(args.binding.sessionID,metadata);args.client.inbox.setState('metadata',metadata);await adapter.start(metadata);}};
+ }};
+ const runtime=await setupNativePlugin(options);t.after(()=>runtime.dispose());await runtime.connect('one');await runtime.connect('two');
+ const id=runtime.status('one').client_id,inbox=f.states[0].client.inbox,directory=inbox.directory;
+ assert.equal(initial.get('one').name,`Review [${id.slice(0,8)}]`);assert.notEqual(initial.get('one').name,initial.get('two').name);
+ assert.equal(await observers.get('one')(),null);title='Renamed';
+ const changed=await observers.get('one')();assert.equal(changed.name,`Renamed [${id.slice(0,8)}]`);
+ assert.equal(runtime.status('one').client_id,id);assert.equal(inbox.directory,directory);assert.equal(f.states.length,2);
+ await runtime.dispose();const reloaded=await setupNativePlugin(options);t.after(()=>reloaded.dispose());await reloaded.connect('one');
+ assert.equal(reloaded.status('one').client_id,id);assert.equal(initial.get('one').name,changed.name);
+});
+
 test('OpenCode rejects classic/unknown host version and foreign project sessions',async t=>{
  const f=await fixture(t);await f.runtime.dispose();f.ctx.app.version='1.19.4';await assert.rejects(()=>setupNativePlugin(f.options),/capability/);f.ctx.app.version='2.2.5';f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'foreign',location:{directory:'/tmp'},time:{created:1}});const runtime=await setupNativePlugin(f.options);t.after(()=>runtime.dispose());await assert.rejects(()=>runtime.connect('foreign'),/mismatch/);
 });
@@ -368,6 +415,39 @@ test('replacement cancellation while attachment waits cannot commit or disturb w
  assert.equal(commits,0);assert.equal(runtime.status('one').client_id,original);assert.ok(await f.states[0].currentBinding());
 });
 
+test('only native connect receives explicit delivery-resume authority and newer pause events invalidate it', async t => {
+ const {EventEmitter,on}=await import('node:events');
+ const f=await fixture(t);await f.runtime.dispose();const emitter=new EventEmitter();let resumes=0;
+ f.ctx.event.subscribe=async function*({signal}){for await(const [event] of on(emitter,'event',{signal}))yield event;};
+ const runtime=await setupNativePlugin({...f.options,deliveryFactory:()=>({start(){},stop:async()=>{},event(){},resume:async({signal,permitted})=>{resumes++;return !signal.aborted&&permitted();}})});t.after(()=>runtime.dispose());
+ await runtime.connect('one');await f.hooks.get('prompt')({sessionID:'one'});
+ await f.tools.get('broker_list_clients').execute({}, {sessionID:'one',messageID:'msg',id:'list',signal:new AbortController().signal});
+ assert.equal(resumes,0);
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ assert.equal((await f.rpc().connect(input,context)).delivery_resumed,true);assert.equal(resumes,1);
+ const original=f.ctx.session.get;let entered,release;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ f.ctx.session.get=async args=>{entered();await new Promise(resolve=>{release=resolve;});return original(args);};
+ const connecting=f.rpc().connect(input,context);await ready;
+ emitter.emit('event',{type:'session.execution.interrupted',data:{sessionID:'one'}});await new Promise(resolve=>setImmediate(resolve));
+ release();const result=await connecting;
+ assert.equal(result.connected,true);assert.equal(result.delivery_resumed,false);assert.equal(resumes,2);
+});
+
+test('a cancellation during initial attachment reaches the new delivery before stale connect can resume it', async t => {
+ const {EventEmitter,on}=await import('node:events');
+ const f=await fixture(t);await f.runtime.dispose();const emitter=new EventEmitter(),observed=[];let entered,release;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ f.ctx.event.subscribe=async function*({signal}){for await(const [event] of on(emitter,'event',{signal}))yield event;};
+ const runtime=await setupNativePlugin({...f.options,
+  adapterFactory:args=>({...f.options.adapterFactory(args),start:async()=>{entered();await new Promise(resolve=>{release=resolve;});}}),
+  deliveryFactory:()=>({start(){},stop:async()=>{},event:event=>observed.push(event.type),resume:async({permitted})=>permitted()})
+ });t.after(()=>runtime.dispose());
+ const connecting=f.rpc().connect({sessionID:'one'},{signal:new AbortController().signal});await ready;
+ emitter.emit('event',{type:'session.inbox.cancelled',data:{sessionID:'one'}});await new Promise(resolve=>setImmediate(resolve));release();
+ assert.equal((await connecting).delivery_resumed,false);assert.deepEqual(observed,['session.inbox.cancelled']);
+});
+
 test('expired authorization retains exact old native anchor while setup remains available for explicit repair',async t=>{
  const f=await fixture(t);await f.runtime.connect('one');const anchor=f.stored.get('psst-v2-host-id'),oldID=f.runtime.status('one').client_id;await f.runtime.dispose();f.stored.clear();let recoveryReads=0;
  const loadSettings=async options=>{if(options?.identityRecovery){recoveryReads++;return{...f.settings,authorizationExpired:true};}throw Object.assign(Error('credential_expired'),{code:'credential_expired'});};
@@ -386,11 +466,49 @@ test('corrupt pending candidate cannot prevent independent working authorization
 });
 
 
+test('doctor inspects cached storage roles without reconnecting, reading configuration again or changing state', async t => {
+ const f=await fixture(t);await f.runtime.dispose();let reads=0,fail=false;
+ const runtime=await setupNativePlugin({...f.options,loadSettings:async()=>{reads++;if(fail)throw Error('doctor must not load configuration');return f.settings;}});t.after(()=>runtime.dispose());
+ const before=[...f.stored],priorReads=reads;fail=true;
+ const result=await f.rpc().doctor({sessionID:'one'},{signal:new AbortController().signal});
+ assert.equal(result.connector_version,'0.8.0');assert.equal(result.host_version,'2.2.5');assert.equal(result.node_version,process.versions.node);
+ assert.ok(result.checks.some(check=>check.role==='state_directory'));assert.equal(reads,priorReads);assert.equal(f.states.length,0);assert.deepEqual([...f.stored],before);
+ assert.doesNotMatch(JSON.stringify(result),/tokenFile|stateDirectory|\/tmp\//);
+ await assert.rejects(f.rpc().doctor({sessionID:'one'},{signal:AbortSignal.abort()}));
+ const original=f.ctx.session.get;f.ctx.session.get=async()=>{throw Error('foreign native context');};
+ await assert.rejects(f.rpc().doctor({sessionID:'one'},{signal:new AbortController().signal}));f.ctx.session.get=original;
+});
+
 test('only send and resend bypass CodeMode so every outgoing mutation keeps its own call identity', async t => {
   const f = await fixture(t);
   for (const [name, definition] of f.tools) {
     assert.equal(definition.options?.codemode, ['broker_send', 'broker_resend'].includes(name) ? false : undefined);
   }
+});
+
+test('native status refreshes public metadata and reports pending messages and a durable pause without clearing it', async t => {
+ const f=await fixture(t);await f.runtime.dispose();let delivery;
+ const original=f.ctx.session.get;let model='first';
+ f.ctx.session.get=async args=>({...await original(args),model:{providerID:'provider',id:model}});
+ const runtime=await setupNativePlugin({...f.options,deliveryFactory:args=>{delivery=createNativeDelivery(args);return{...delivery,start(){}};}});t.after(()=>runtime.dispose());
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ const absent=await f.rpc().status(input,context);assert.equal(absent.pending_count,null);assert.equal(absent.metadata,null);assert.equal(f.states.length,0);
+ await runtime.connect('one');const identity=runtime.status('one').client_id,inbox=f.states.at(-1).client.inbox,now=Date.now();
+ inbox.accept({protocol_version:'1',message_id:randomUUID(),recipient_id:identity,recipient_sequence:1,
+  sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
+  origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'Keep unread.'},
+  accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null});
+ delivery.event({type:'session.execution.interrupted',data:{sessionID:'one'}});model='renamed-model';
+ const before=inbox.head(),result=await f.rpc().status(input,context);
+ assert.equal(result.connected,true);assert.equal(result.client_id,identity);assert.equal(result.node_version,process.versions.node);
+ assert.equal(result.metadata.model.id,'renamed-model');assert.equal(result.pending_count,1);
+ assert.equal(result.delivery_paused,true);assert.equal(result.delivery_pause_reason,'session.execution.interrupted');
+ assert.deepEqual(inbox.head(),before);await delivery.tick();assert.deepEqual(inbox.head(),before);
+ await assert.rejects(f.rpc().status(input,{signal:AbortSignal.abort()}));
+ f.ctx.session.get=async args=>({...await original(args),time:{created:2}});
+ await assert.rejects(f.rpc().status(input,context),/mismatch/);
+ f.ctx.session.get=original;await f.rpc().disconnect(input,context);
+ const disconnected=await f.rpc().status(input,context);assert.equal(disconnected.disconnected,true);assert.equal(disconnected.pending_count,null);assert.equal(disconnected.delivery_paused,null);
 });
 
 test('confirmed session expiry retains the same journal and blocks automatic mailbox replacement', async t => {

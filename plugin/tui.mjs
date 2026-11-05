@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { SETUP_RPC } from '../src/setup-rpc.mjs';
+import { DOCTOR_ROLES, DOCTOR_CODES } from '../src/doctor.mjs';
 import { installationDirectory } from '../src/installation.mjs';
 import { createPresenceWriter, presenceDirectory } from '../src/active-presence.mjs';
 
@@ -86,8 +87,31 @@ function statusMessage(result) {
   if (typeof result?.request_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(result.request_id)) message += ` Request: ${result.request_id}.`;
   if (result?.request_outcome === 'unknown') message += ' The request outcome is unknown. Check /psst-status in the original chat before retrying; the saved request must be reconciled.';
   else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
+  if (result?.connected === true && result?.delivery_resumed === false) message += ' Automatic delivery remains paused; a newer cancellation or native guard was retained. Check /psst-status before retrying.';
   if (result?.disconnected === true) message = 'Psst is disconnected for this chat. Polling, heartbeat and automatic delivery are stopped. Use /psst-connect to reuse saved authorization. Local data is retained.';
-  return message;
+  if (result?.disconnected === true && setupMessage && result.state !== 'setup_needed') message += ` Setup: ${setupMessage}`;
+  return message + statusDetails(result);
+}
+function statusDetails(result) {
+  if (!result || !['connector_version', 'client_id', 'metadata', 'pending_count', 'delivery_paused'].some(key => Object.hasOwn(result, key))) return '';
+  const version = value => typeof value === 'string' && value.length <= 64 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,40})?$/.test(value) ? value : 'unknown';
+  const label = value => typeof value === 'string' && value.length <= 256 && value.isWellFormed()
+    && !/[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(value)
+    && !/^(?:[\\/]|[A-Za-z]:[\\/])/.test(value) ? JSON.stringify(value) : 'unknown';
+  const id = typeof result.client_id === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.client_id) ? result.client_id : 'unknown';
+  const count = Number.isSafeInteger(result.pending_count) && result.pending_count >= 0 ? result.pending_count : 'unknown';
+  const reasons = { 'session.execution.interrupted': 'interrupted turn', 'session.execution.failed': 'failed turn',
+    'session.inbox.cancelled': 'cancelled native admission', 'session.revert.staged': 'native revert', storage_unavailable: 'storage unavailable' };
+  const pause = result.delivery_paused === true ? `paused (${Object.hasOwn(reasons, result.delivery_pause_reason) ? reasons[result.delivery_pause_reason] : 'unknown reason'})`
+    : result.delivery_paused === false ? 'not paused' : 'unknown';
+  const availability = ['selected', 'inactive'].includes(result.availability) ? result.availability : 'unknown';
+  const authorization = ['active', 'expired', 'rejected', 'blocked', 'unknown'].includes(result.authorization_state) ? result.authorization_state : 'unknown';
+  return ` Connector ${version(result.connector_version)}; OpenCode ${version(result.host_version)}; Node ${version(result.node_version)}. Client ID: ${id}. Name: ${label(result.metadata?.name)}; project: ${label(result.metadata?.project)}; model: ${label(result.metadata?.model?.id)}. Pending: ${count}; delivery: ${pause}; selection: ${availability}; authorization: ${authorization}. Native admission is not model reading or task completion.`;
+}
+function doctorMessage(result) {
+  const version = value => typeof value === 'string' && value.length <= 64 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,40})?$/.test(value) ? value : 'unknown';
+  const checks = Array.isArray(result?.checks) ? result.checks.slice(0, 8).filter(check => DOCTOR_ROLES.includes(check?.role) && DOCTOR_CODES.includes(check?.code)) : [];
+  return `Read-only Psst doctor: connector ${version(result?.connector_version)}; OpenCode ${version(result?.host_version)}; Node ${version(result?.node_version)} (requires 24.19+ within major 24). ${checks.length ? checks.map(check => `${check.role}=${check.code}`).join('; ') : 'Storage inspection unavailable'}. Missing paths may be normal before setup. For unsafe/unavailable storage, check the named role with your administrator; preserve credentials, journals and locks. No file contents, databases or credentials are opened, and no repairs or broker requests are made.`;
 }
 function registerSetupUI(ctx, available) {
   // Presence-only hosts/tests still work; never touch the client without the
@@ -176,7 +200,10 @@ function registerSetupUI(ctx, available) {
           ...(Object.hasOwn(status ?? {}, 'selection_revision') ? { selection_revision: status.selection_revision } : {}),
           ...(replacement_confirmed && status?.replacement_confirmation_required === true ? { replacement_confirmed: true, replacement_request_id: status.request_id } : {}) });
         toast(statusMessage(result));
-      } else toast(statusMessage(await call(kind, {})));
+      } else {
+        const result = await call(kind, {});
+        toast(kind === 'doctor' ? doctorMessage(result) : statusMessage(result));
+      }
     } catch (error) {
       let message = error?.message === 'invalid_url'
         ? 'Enter an HTTPS broker origin only, without credentials, path, query or fragment.'
@@ -205,6 +232,7 @@ function registerSetupUI(ctx, available) {
     { id: 'psst-connect', title: 'Psst: Connect using saved authorization', description: 'Reconnect this chat without setup or replacement authorization.', group: 'Psst', palette: true, slash: { name: 'psst-connect' }, run: () => run('connect') },
     { id: 'psst-disconnect', title: 'Psst: Disconnect this chat', description: 'Stop transport until /psst-connect, including across reload. Retain credentials and local data.', group: 'Psst', palette: true, slash: { name: 'psst-disconnect' }, run: () => run('disconnect') },
     { id: 'psst-status', title: 'Psst: Check status', group: 'Psst', palette: true, slash: { name: 'psst-status' }, run: () => run('status') },
+    { id: 'psst-doctor', title: 'Psst: Read-only diagnostics', description: 'Inspect runtime versions and private storage metadata; no credentials, broker requests or repairs.', group: 'Psst', palette: true, slash: { name: 'psst-doctor' }, run: () => run('doctor') },
     { id: 'psst-cancel-setup', title: 'Psst: Pause setup', group: 'Psst', palette: true, slash: { name: 'psst-cancel-setup' }, run: () => run('cancel') },
   ] }));
   return () => { disposed = true; active?.abort(); };

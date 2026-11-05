@@ -12,6 +12,7 @@ export const SETUP_RPC = {
     cancel: { input: input(), output },
     connect: { input: input(), output },
     disconnect: { input: input(), output },
+    doctor: { input: input(), output },
   },
   events: {},
 };
