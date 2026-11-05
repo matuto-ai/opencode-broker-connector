@@ -257,7 +257,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
     let metadata = null, pendingCount = null, delivery = { paused: null, pause_reason: null };
     if (state?.delivery && !state.controller.signal.aborted) {
-      try { metadata = nativeMetadata(state.info, { ...state.settings, ...metadataOptions }); } catch {}
+      try { metadata = nativeMetadata(state.info, { ...state.settings, ...metadataOptions }, process.env, state.inbox.identity.client_id); } catch {}
       try { pendingCount = state.inbox.stats().pending_count; delivery = state.delivery.status?.(state.info) ?? delivery; }
       catch { delivery = { paused: true, pause_reason: 'storage_unavailable' }; }
     }
