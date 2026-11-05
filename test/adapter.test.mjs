@@ -187,16 +187,15 @@ test('new outgoing tools preserve exact scoped context and keep technical keys i
   assert.equal((await json(f,'broker_send',{recipient_id:id,text:'x',send_key:'forged'})).error.code,'invalid_configuration');
 });
 
-test('human-authorized ping reply uses received IDs without another question and retains identity on uncertain retry', async t => {
-  // Human authorization is a host/model prerequisite, not inferred by the
-  // connector from ping text. This exercises the admitted native tool boundary.
+test('peer reply needs no separate grant, uses received IDs and retains identity on uncertain retry', async t => {
+  // Exercises the native tool boundary, not model compliance with guidance.
   const { replyRouting } = await import('../src/message-format.mjs');
   const keys = [], requests = [];
   const f = await fixture(t, { operationContext: context => ({ operationId: context.callID, operationStartedAt: epoch }), clientChanges: {
     prepareSend(request, options) { requests.push(request); return this.inbox.prepareSend(request, options); },
     async sendPrepared(key) { keys.push(key); if (keys.length === 1) throw new reference.LocalError('transport_error', { effect: 'unknown' }); return { message_id: randomUUID(), state: 'accepted', send_key: key }; },
   } });
-  await f.start(); const received = message(f.identity, 'Please reply pong for our authorized test'); received.correlation_id = 'test-ping';
+  await f.start(); const received = message(f.identity, 'Please reply pong'); received.correlation_id = 'test-ping';
   const args = { ...replyRouting(received), text: 'pong' }, context = { ...f.context, callID: 'native-reply-1' };
   const unknown = await json(f, 'broker_send', args, context);
   assert.equal(unknown.error.effect, 'unknown'); assert.equal(keys.length, 1, 'no automatic response/retry loop');
