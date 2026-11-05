@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0 — unreleased source candidate
+
+- Prepare version metadata for the merged connector changes and update installation and release instructions. Publication remains a separate owner action.
+
 ## 0.8.0 — unreleased source candidate
 
 - Add native `/psst-connect` and `/psst-disconnect` slash/palette commands. Reuse saved authorization and mailbox identity; persist per-chat disconnect across reload, pause its setup wait, and retain credentials and unread/uncertain journals.
