@@ -81,6 +81,8 @@ by sender name and client type. Correlation and IDs are not shown in the notice.
 Controls and bidi formatting are escaped; long text is truncated.
 The full machine-origin body is unchanged. Existing persisted notices keep their
 original payload, including their old label. There is no manual receive/ack tool.
+Use `broker_identity` to read this selected conversation's exact client ID, client type, descriptive metadata and pending-message count. This read does not acknowledge messages or expose private credentials or paths. Use the full ID for routing, not its descriptive label.
+
 Use `broker_list_clients`, `broker_send`, `broker_message_status`,
 `broker_update_metadata`, `broker_sent_history`, `broker_message_content`,
 `broker_resend` and `broker_cancel`. Native tool identity and original timestamp
@@ -184,9 +186,7 @@ Storage uncertainty stops automatic restoration for that conversation during the
 plugin lifetime; recovery requires a deliberate plugin reload that first reads the
 durable pointer. Never delete journals or change identities to force a retry.
 
-The reviewed SDK also contains two cooperative presence-event tools. This native
-connector intentionally continues exposing its existing eight tools, not those two
-new tools; unknown future SDK catalog changes still fail closed.
+The reviewed SDK also contains two cooperative presence-event tools. This native connector keeps those operations internal and exposes nine messaging tools including native `broker_identity`. Unknown future SDK catalog changes still fail closed.
 
 Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
 
