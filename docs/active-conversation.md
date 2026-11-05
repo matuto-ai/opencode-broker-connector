@@ -38,9 +38,7 @@ already-authorized conversation (and cause its normal automatic wake/cost).
 It cannot create an authorized native binding, supply credentials, change scopes,
 redirect an inbox to another session, or grant tool access. The server continues
 to own credentials and journals and independently verifies exact native bindings.
-There is no public activate RPC or credential exchange. The native setup RPC
-accepts only a selected session ID, broker URL and exact-request replacement
-confirmation; it cannot supply credentials or bypass broker admin approval.
+There is no public activate RPC or credential exchange. The native setup RPC accepts only a selected session ID, broker URL and request/revision-bound replacement intent; it cannot supply credentials or bypass broker admin approval.
 
 Archive suspension can resume after native unarchive. Explicit disabled records,
 and older disabled records whose reason is unknown, remain disabled; selection
