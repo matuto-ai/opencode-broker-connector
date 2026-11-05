@@ -1,5 +1,6 @@
 import packageInfo from '../package.json' with { type: 'json' };
 import { nativeMetadata } from './native-metadata.mjs';
+import { inspectStorage } from './doctor.mjs';
 import { createPresenceReader, presenceDirectory } from './active-presence.mjs';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
@@ -29,10 +30,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     || typeof ctx?.storage?.get !== 'function' || typeof ctx?.storage?.set !== 'function' || typeof ctx?.storage?.scan !== 'function'
     || typeof ctx?.tool?.transform !== 'function' || typeof ctx?.event?.subscribe !== 'function') throw new Error('psst_host_capability_unavailable');
   const directory = realpathSync(ctx.location.directory);
-  let authorizationExpired = false;
+  let authorizationExpired = false, diagnosticSettings;
   const readCurrentSettings = async options => {
-    try { const settings = await loadSettings(options); authorizationExpired = settings?.authorizationExpired === true; return settings; }
-    catch (error) { if (error.code === 'credential_expired') authorizationExpired = true; throw error; }
+    try { const settings = await loadSettings(options); diagnosticSettings = settings; authorizationExpired = settings?.authorizationExpired === true; return settings; }
+    catch (error) { diagnosticSettings = undefined; if (error.code === 'credential_expired') authorizationExpired = true; throw error; }
   };
   const hostID = await withNativeLock(setupOptions.directory ?? installationDirectory(), 'host-anchor', async () => {
     const settings = await readCurrentSettings({ identityRecovery: setupEnabled });
@@ -295,6 +296,14 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       registrations.push(await ctx.rpc.register(SETUP_RPC, {
         status: (input, context) => invoke('broker_setup_status', input, context),
         setup: (input, context) => invoke('broker_setup', input, context),
+        doctor: async (input, context) => {
+          if (!(context?.signal instanceof AbortSignal) || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          await getInfo(input.sessionID, context.signal);
+          if (context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          return { connector_version: packageInfo.version, host_version: HOST_VERSION, node_version: process.versions.node,
+            checks: inspectStorage({ installation: setupOptions.directory ?? installationDirectory(),
+              stateDirectory: diagnosticSettings?.stateDirectory, tokenFile: diagnosticSettings?.broker?.tokenFile }) };
+        },
         cancel: (input, context) => invoke('broker_cancel_setup', input, context),
         connect: (input, context) => connectionCommand('connect', input, context),
         disconnect: (input, context) => connectionCommand('disconnect', input, context),

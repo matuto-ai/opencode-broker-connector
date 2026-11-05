@@ -416,6 +416,19 @@ test('corrupt pending candidate cannot prevent independent working authorization
 });
 
 
+test('doctor inspects cached storage roles without reconnecting, reading configuration again or changing state', async t => {
+ const f=await fixture(t);await f.runtime.dispose();let reads=0,fail=false;
+ const runtime=await setupNativePlugin({...f.options,loadSettings:async()=>{reads++;if(fail)throw Error('doctor must not load configuration');return f.settings;}});t.after(()=>runtime.dispose());
+ const before=[...f.stored],priorReads=reads;fail=true;
+ const result=await f.rpc().doctor({sessionID:'one'},{signal:new AbortController().signal});
+ assert.equal(result.connector_version,'0.8.0');assert.equal(result.host_version,'2.2.5');assert.equal(result.node_version,process.versions.node);
+ assert.ok(result.checks.some(check=>check.role==='state_directory'));assert.equal(reads,priorReads);assert.equal(f.states.length,0);assert.deepEqual([...f.stored],before);
+ assert.doesNotMatch(JSON.stringify(result),/tokenFile|stateDirectory|\/tmp\//);
+ await assert.rejects(f.rpc().doctor({sessionID:'one'},{signal:AbortSignal.abort()}));
+ const original=f.ctx.session.get;f.ctx.session.get=async()=>{throw Error('foreign native context');};
+ await assert.rejects(f.rpc().doctor({sessionID:'one'},{signal:new AbortController().signal}));f.ctx.session.get=original;
+});
+
 test('only send and resend bypass CodeMode so every outgoing mutation keeps its own call identity', async t => {
   const f = await fixture(t);
   for (const [name, definition] of f.tools) {

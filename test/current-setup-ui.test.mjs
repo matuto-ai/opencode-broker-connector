@@ -23,7 +23,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
       dialog: { prompt: async arg => { prompts.push(arg); return prompt(); }, confirm: async arg => { confirmations.push(arg); return confirm(); } } },
     client: { rpc(definition) {
       assert.equal(definition, SETUP_RPC);
-      return Object.fromEntries(['status', 'setup', 'cancel', 'connect', 'disconnect'].map(name => [name, async (input, options) => {
+      return Object.fromEntries(['status', 'setup', 'cancel', 'connect', 'disconnect', 'doctor'].map(name => [name, async (input, options) => {
         calls.push({ name, input, options });
         assert.deepEqual(options.location, ctx.location); assert.ok(options.signal instanceof AbortSignal);
         return typeof result[name] === 'function' ? result[name](input, options) : result[name] ?? { state: name === 'cancel' ? 'paused' : 'pending' };
@@ -37,7 +37,7 @@ function fixture(t, { prompt = async () => 'https://broker.example.com', confirm
 }
 test('official native palette/slash commands use one URL and selected-session RPC', async t => {
   const f = fixture(t);
-  assert.deepEqual(f.commands.map(x => [x.id, x.slash.name, x.palette]), ['psst-setup', 'psst-reauthorize', 'psst-connect', 'psst-disconnect', 'psst-status', 'psst-cancel-setup'].map(x => [x, x, true]));
+  assert.deepEqual(f.commands.map(x => [x.id, x.slash.name, x.palette]), ['psst-setup', 'psst-reauthorize', 'psst-connect', 'psst-disconnect', 'psst-status', 'psst-doctor', 'psst-cancel-setup'].map(x => [x, x, true]));
   await f.run('psst-setup');
   assert.equal(f.prompts.length, 1); assert.equal(f.confirmations.length, 0);
   assert.deepEqual(f.calls.map(x => [x.name, x.input]), [
@@ -140,6 +140,17 @@ test('shared local presence guard must pass before dialog or RPC', async t => {
   const f = fixture(t); f.ctx.location = { directory: '/nonexistent-psst-local' };
   await f.run('psst-setup'); assert.equal(f.prompts.length, 0); assert.equal(f.calls.length, 0);
 });
+test('doctor uses selected-session RPC and renders only allowlisted metadata', async t => {
+  const f = fixture(t, { result: { doctor: { connector_version: '0.8.0', host_version: '2.2.5', node_version: '24.22.2',
+    checks: [{ role: 'state_directory', code: 'private_mode_required' }, { role: '/private/secret', code: 'ok' }, { role: 'credential_file', code: 'secret' }], token: 'secret' } } });
+  await f.run('psst-doctor');
+  assert.deepEqual(f.calls.map(call => [call.name, call.input]), [['doctor', { sessionID: 'ses_one' }]]);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+  assert.match(f.toasts.at(-1).message, /connector 0.8.0; OpenCode 2.2.5; Node 24.22.2/);
+  assert.match(f.toasts.at(-1).message, /state_directory=private_mode_required/);
+  assert.doesNotMatch(f.toasts.at(-1).message, /private\/secret|token|credential_file=secret/);
+});
+
 test('portable RPC schemas accept only native session, URL, and explicit replacement fence', () => {
   assert.deepEqual(Object.keys(SETUP_RPC.methods.setup.input.properties), ['sessionID', 'broker_url', 'reauthorize', 'replacement_confirmed', 'replacement_request_id', 'selection_revision']);
   for (const method of Object.values(SETUP_RPC.methods)) assert.equal(method.input.additionalProperties, false);
