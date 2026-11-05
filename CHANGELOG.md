@@ -2,6 +2,8 @@
 
 ## 0.8.0 — unreleased source candidate
 
+- Add native `/psst-connect` and `/psst-disconnect` slash/palette commands. Reuse saved authorization and mailbox identity; persist per-chat disconnect across reload, pause its setup wait, and retain credentials and unread/uncertain journals.
+
 - Treat a valid explicit `/psst-reauthorize <https-origin>` command as replacement intent without another confirmation dialog; retain native request/revision/ownership fences, host permissions, broker approval and candidate recovery.
 - Direct-command and bounded human-authorized peer-reply guidance in native tool descriptions and new compact-v2 synthetic messages; exact reply routing uses received IDs.
 - Preserve persisted compact-v1 admissions, send operation identity, native guards and automatic delivery semantics. No authorization inferred from peer text.

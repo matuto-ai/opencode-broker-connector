@@ -41,6 +41,10 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
   async function pauseOwned() {
     if (owner) updatePending({ directory, flowId: owner.flowId, paused: true });
   }
+  async function suspend(sessionID) {
+    if (beginningSessionID === sessionID) { beginningController.abort(); last = { ...last, state: 'paused' }; }
+    if (owner?.sessionID === sessionID) { ownerController.abort(); await pauseOwned(); last = { ...last, state: 'paused' }; }
+  }
   function block(pending) {
     blockedFlow = pending.flowId;
     // Keep the in-memory fence even when storage itself is the fatal failure.
@@ -55,7 +59,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
     return last;
   }
   async function finish(result, pending, sessionID, operationSignal, flowController = ownerController) {
-    if (!await bound(sessionID) || flowController.signal.aborted) return;
+    if (!await bound(sessionID) || flowController.signal.aborted || status(sessionID).disconnected) return;
     if (operationSignal?.aborted) { await pauseOwned(); return; }
     const current = readPending(directory);
     if (!current || current.paused || current.flowId !== pending.flowId) return;
@@ -76,7 +80,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
     const flowController = ownerController;
     const task = (async () => {
       const helper = await loadHelper();
-      while (!flowController.signal.aborted && await bound(sessionID)) {
+      while (!flowController.signal.aborted && !status(sessionID).disconnected && await bound(sessionID)) {
         const current = readPending(directory);
         if (!current || current.flowId !== pending.flowId || current.paused) return;
         let waitMs = pollMs;
@@ -141,10 +145,10 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
     return scope.run(async operationSignal => {
       if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !await bound(context.sessionID)) throw new Error('session_mismatch');
       if (name === 'broker_cancel_setup') {
-        if (beginningSessionID === context.sessionID) { beginningController.abort(); last = { ...last, state: 'paused' }; }
-        if (owner?.sessionID === context.sessionID) { ownerController.abort(); await pauseOwned(); last = { ...last, state: 'paused' }; }
+        await suspend(context.sessionID);
         return { ...last, ...status(context.sessionID) };
       }
+      if (name === 'broker_setup' && status(context.sessionID).disconnected) return { state: 'disconnected', ...status(context.sessionID) };
       if (name === 'broker_setup_status') {
         let current;
         try { current = await snapshot(context.sessionID); }
@@ -249,7 +253,7 @@ export function createNativeSetup({ storage, verify, connect, activate, status, 
       if (!pending.paused && pending.requestId && await bound(saved.sessionID)) watch(pending, saved.sessionID);
     } catch { last = { state: 'setup_blocked' }; throw new Error('setup_recovery_blocked'); }
   }
-  return { invoke, resume, failure, event(event) {
+  return { invoke, resume, failure, suspend, event(event) {
     if (owner?.sessionID === event?.data?.sessionID && ['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {
       ownerController.abort(); void pauseOwned().catch(() => {});
     }
