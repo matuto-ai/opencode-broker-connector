@@ -165,13 +165,7 @@ paths; do not convert an enrolled bundle into plain configuration to opt in.
 This does not enable server cleanup. The broker's retention/enforcement activation
 is a separate operator decision after all connectors are compatible.
 
-An inactive native conversation resumes the same identity before expiry. After an
-authenticated lookup confirms its own broker session is gone, the connector
-revalidates the exact native conversation and selected state, then creates a fresh
-empty journal and identity. A private atomic `current-incarnation.json` pointer
-selects that generation on reload. Old pending sends, claims, native admissions and
-uncertain operations are never copied or replayed into the new generation. Old
-local journals remain untouched; this is not local-history deletion.
+An inactive native conversation resumes the same identity before expiry. Confirmed broker-session expiry now blocks restoration instead of automatically allocating a fresh mailbox. Existing journals, any `current-incarnation.json` selection, pending sends, claims and uncertain native admissions remain intact. Revocation, incompatible ownership, malformed successful protocol responses and uncertain/corrupt storage also fail closed. Automatic outage recovery never requests replacement authorization or adopts another inbox.
 
 The original root `owner.sqlite` lock remains held across rebuilding and child
 journals, preventing another worker from concurrently adopting the old root.
@@ -185,5 +179,11 @@ connector intentionally continues exposing its existing eight tools, not those t
 new tools; unknown future SDK catalog changes still fail closed.
 
 Native offline transport notices and their exact-context ACK semantics are documented in [presence-notices](docs/presence-notices.md).
+
+### Automatic outage recovery
+
+While this chat remains selected, heartbeat supervision stays alive during transient broker/network failures. A successful heartbeat reopens a failed receiver with its existing claim retry identity; a validated stale-lease response reconciles the owned session without waiting for a 200 heartbeat. Lease reconciliation is serialized, with at most three attempts per round, one- and two-second spacing, and a heartbeat-length cooldown before another eligible round. An ordinary in-flight long poll is not a stalled receiver; an empty successful poll is healthy.
+
+`/psst-status` reports current `transport.heartbeat`, `transport.reception`, `transport.recovery` and a sanitized active `transport.error_code`, rather than inferring reception from a running delivery timer. A heartbeat alone does not clear a receive failure; a successful mailbox poll does. `last_delivery_status` remains historical native-admission information. Retry waiting needs neither manual connect nor new approval. `/psst-disconnect`, native-session changes and shutdown fence old work, and human delivery pauses remain paused. See [the fault-injection scenario and evidence limits](docs/verification.md#outage-and-return-regression).
 
 For interrupted URL setup or multiple open chats, see [setup context and focus recovery](docs/setup-context-recovery.md). Keep unrelated chats open; return to the original chat and reconcile its saved request with `/psst-status`.
