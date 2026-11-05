@@ -102,6 +102,25 @@ test('cancellation queued after durable intent but before deferred dispatch prev
  await f.delivery.tick();assert.equal(f.submitted.length,0);assert.equal(f.inbox.head().state,'pending');await f.delivery.tick();assert.equal(f.submitted.length,0);
 });
 
+test('delivery status reads durable and native pause reasons without consuming or resuming', async t => {
+ const f=fixture(t);f.accept();
+ assert.deepEqual(f.delivery.status(f.info),{paused:false,pause_reason:null});
+ f.info.outcome='failed';f.info.time.idle=5;f.info.time.busy=2;
+ assert.deepEqual(f.delivery.status(f.info),{paused:true,pause_reason:'session.execution.failed'});
+ f.delivery.event({type:'session.inbox.cancelled',data:{sessionID:'ses_native'}});
+ await f.reopen();const before=f.inbox.head();
+ assert.deepEqual(f.delivery.status(f.info),{paused:true,pause_reason:'session.inbox.cancelled'});
+ assert.deepEqual(f.inbox.head(),before);await f.delivery.tick();assert.equal(f.submitted.length,0);
+});
+
+test('status and delivery agree about an exact persisted resume outcome without clearing a newer pause', async t => {
+ const f=fixture(t);f.info.outcome='failed';f.info.time.idle=5;f.info.time.busy=2;f.accept();
+ f.inbox.transaction(()=>f.inbox.db.prepare('INSERT INTO v2_state(key,value) VALUES(?,?)').run('v2_resumed_outcome',JSON.stringify(canonical({outcome:'failed',idle:5,busy:2}))));
+ assert.equal(f.delivery.status(f.info).paused,false);await f.delivery.tick();assert.equal(f.submitted.length,1);
+ f.delivery.event({type:'session.execution.failed',data:{sessionID:'ses_native'}});
+ assert.equal(f.delivery.status(f.info).paused,true);
+});
+
 // Seed the exact pre-preview journal shape, before loading the new delivery code.
 // No host retry is permitted during this local compatibility reconciliation.
 function legacySubmission(f,e,payloadOverride,historicalPayload) {

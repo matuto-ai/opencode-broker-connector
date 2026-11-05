@@ -178,6 +178,12 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       if (event.type === 'session.execution.started') { setState('v2_resumed_outcome', null); setState('v2_paused', null); }
       if (['session.deleted', 'session.moved', 'session.archived'].includes(event.type)) { epoch++; stopped = true; clearInterval(timer); }
     },
+    status(info) {
+      const local = getState('v2_paused');
+      const reason = info?.revert ? 'session.revert.staged' : local || (info && paused(info) ? `session.execution.${info.outcome}` : null);
+      const known = ['session.execution.interrupted', 'session.execution.failed', 'session.inbox.cancelled', 'session.revert.staged'];
+      return { paused: reason ? true : info ? false : null, pause_reason: reason ? known.includes(reason) ? reason : 'unknown' : null };
+    },
     async stop() { stopped = true; epoch++; clearInterval(timer); await running; },
   };
 }

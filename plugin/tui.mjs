@@ -81,7 +81,24 @@ function statusMessage(result) {
   else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
   if (result?.connected === true && result?.delivery_resumed === false) message += ' Automatic delivery remains paused; a newer cancellation or native guard was retained. Check /psst-status before retrying.';
   if (result?.disconnected === true) message = 'Psst is disconnected for this chat. Polling, heartbeat and automatic delivery are stopped. Use /psst-connect to reuse saved authorization. Local data is retained.';
-  return message;
+  if (result?.disconnected === true && setupMessage && result.state !== 'setup_needed') message += ` Setup: ${setupMessage}`;
+  return message + statusDetails(result);
+}
+function statusDetails(result) {
+  if (!result || !['connector_version', 'client_id', 'metadata', 'pending_count', 'delivery_paused'].some(key => Object.hasOwn(result, key))) return '';
+  const version = value => typeof value === 'string' && value.length <= 64 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,40})?$/.test(value) ? value : 'unknown';
+  const label = value => typeof value === 'string' && value.length <= 256 && value.isWellFormed()
+    && !/[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]/u.test(value)
+    && !/^(?:[\\/]|[A-Za-z]:[\\/])/.test(value) ? JSON.stringify(value) : 'unknown';
+  const id = typeof result.client_id === 'string' && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(result.client_id) ? result.client_id : 'unknown';
+  const count = Number.isSafeInteger(result.pending_count) && result.pending_count >= 0 ? result.pending_count : 'unknown';
+  const reasons = { 'session.execution.interrupted': 'interrupted turn', 'session.execution.failed': 'failed turn',
+    'session.inbox.cancelled': 'cancelled native admission', 'session.revert.staged': 'native revert', storage_unavailable: 'storage unavailable' };
+  const pause = result.delivery_paused === true ? `paused (${Object.hasOwn(reasons, result.delivery_pause_reason) ? reasons[result.delivery_pause_reason] : 'unknown reason'})`
+    : result.delivery_paused === false ? 'not paused' : 'unknown';
+  const availability = ['selected', 'inactive'].includes(result.availability) ? result.availability : 'unknown';
+  const authorization = ['active', 'expired', 'rejected', 'blocked', 'unknown'].includes(result.authorization_state) ? result.authorization_state : 'unknown';
+  return ` Connector ${version(result.connector_version)}; OpenCode ${version(result.host_version)}; Node ${version(result.node_version)}. Client ID: ${id}. Name: ${label(result.metadata?.name)}; project: ${label(result.metadata?.project)}; model: ${label(result.metadata?.model?.id)}. Pending: ${count}; delivery: ${pause}; selection: ${availability}; authorization: ${authorization}. Native admission is not model reading or task completion.`;
 }
 function doctorMessage(result) {
   const version = value => typeof value === 'string' && value.length <= 64 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,40})?$/.test(value) ? value : 'unknown';
