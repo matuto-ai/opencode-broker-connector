@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { SETUP_RPC } from '../src/setup-rpc.mjs';
+import { DOCTOR_ROLES, DOCTOR_CODES } from '../src/doctor.mjs';
 import { installationDirectory } from '../src/installation.mjs';
 import { createPresenceWriter, presenceDirectory } from '../src/active-presence.mjs';
 
@@ -80,6 +81,11 @@ function statusMessage(result) {
   else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
   if (result?.disconnected === true) message = 'Psst is disconnected for this chat. Polling, heartbeat and automatic delivery are stopped. Use /psst-connect to reuse saved authorization. Local data is retained.';
   return message;
+}
+function doctorMessage(result) {
+  const version = value => typeof value === 'string' && value.length <= 64 && /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]{1,40})?$/.test(value) ? value : 'unknown';
+  const checks = Array.isArray(result?.checks) ? result.checks.slice(0, 8).filter(check => DOCTOR_ROLES.includes(check?.role) && DOCTOR_CODES.includes(check?.code)) : [];
+  return `Read-only Psst doctor: connector ${version(result?.connector_version)}; OpenCode ${version(result?.host_version)}; Node ${version(result?.node_version)} (requires 24.19+ within major 24). ${checks.length ? checks.map(check => `${check.role}=${check.code}`).join('; ') : 'Storage inspection unavailable'}. Missing paths may be normal before setup. For unsafe/unavailable storage, check the named role with your administrator; preserve credentials, journals and locks. No file contents, databases or credentials are opened, and no repairs or broker requests are made.`;
 }
 function registerSetupUI(ctx, available) {
   // Presence-only hosts/tests still work; never touch the client without the
@@ -168,7 +174,10 @@ function registerSetupUI(ctx, available) {
           ...(Object.hasOwn(status ?? {}, 'selection_revision') ? { selection_revision: status.selection_revision } : {}),
           ...(replacement_confirmed && status?.replacement_confirmation_required === true ? { replacement_confirmed: true, replacement_request_id: status.request_id } : {}) });
         toast(statusMessage(result));
-      } else toast(statusMessage(await call(kind, {})));
+      } else {
+        const result = await call(kind, {});
+        toast(kind === 'doctor' ? doctorMessage(result) : statusMessage(result));
+      }
     } catch (error) {
       let message = error?.message === 'invalid_url'
         ? 'Enter an HTTPS broker origin only, without credentials, path, query or fragment.'
@@ -197,6 +206,7 @@ function registerSetupUI(ctx, available) {
     { id: 'psst-connect', title: 'Psst: Connect using saved authorization', description: 'Reconnect this chat without setup or replacement authorization.', group: 'Psst', palette: true, slash: { name: 'psst-connect' }, run: () => run('connect') },
     { id: 'psst-disconnect', title: 'Psst: Disconnect this chat', description: 'Stop transport until /psst-connect, including across reload. Retain credentials and local data.', group: 'Psst', palette: true, slash: { name: 'psst-disconnect' }, run: () => run('disconnect') },
     { id: 'psst-status', title: 'Psst: Check status', group: 'Psst', palette: true, slash: { name: 'psst-status' }, run: () => run('status') },
+    { id: 'psst-doctor', title: 'Psst: Read-only diagnostics', description: 'Inspect runtime versions and private storage metadata; no credentials, broker requests or repairs.', group: 'Psst', palette: true, slash: { name: 'psst-doctor' }, run: () => run('doctor') },
     { id: 'psst-cancel-setup', title: 'Psst: Pause setup', group: 'Psst', palette: true, slash: { name: 'psst-cancel-setup' }, run: () => run('cancel') },
   ] }));
   return () => { disposed = true; active?.abort(); };
