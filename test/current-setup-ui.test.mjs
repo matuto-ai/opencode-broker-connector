@@ -56,6 +56,12 @@ test('connect/disconnect dispatch directly to selected-session RPC without setup
   assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
 });
 
+test('connect does not present a newer delivery pause as resumed', async t => {
+  const f=fixture(t,{result:{connect:{connected:true,delivery_resumed:false}}});
+  await f.run('psst-connect');assert.match(f.toasts.at(-1).message,/Automatic delivery remains paused/);
+  assert.match(f.toasts.at(-1).message,/newer cancellation or native guard/);
+});
+
 test('setup and reauthorization direct a disconnected chat to connect without dialogs or enrollment', async t => {
   const f = fixture(t, { result: { status: { disconnected: true, state: 'paused' } } });
   await f.run('psst-setup'); await f.run('psst-reauthorize', 'https://broker.example.com');
