@@ -102,6 +102,10 @@ not model understanding, human approval or completed work. Sender/message IDs st
 in a compact machine-origin envelope. Uncertain/cancelled submissions are never
 blindly retried or discarded. See [delivery](docs/native-automation.md).
 
+### Conversation labels
+
+A valid explicit `name` override wins. Otherwise the broker label uses the verified native conversation title plus a stable eight-character client-ID suffix, for example `Review [12ab34cd]`. Missing, unsafe or path-shaped titles use `OpenCode [suffix]`; long safe titles are truncated by Unicode characters to keep the full label within 128 characters. Initial registration and the existing outgoing-metadata refresh path observe renames without changing authorization, the full client ID or mailbox. Titles are visible to authorized peers, so avoid secrets in them. A title or short suffix is descriptive, never a routing address: always use the full exact client ID.
+
 ## Compatibility
 
 OpenCode **2.x** native plugin APIs are the target; **2.2.5** is the validated
