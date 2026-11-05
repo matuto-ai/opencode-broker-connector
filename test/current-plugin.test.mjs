@@ -393,6 +393,31 @@ test('only send and resend bypass CodeMode so every outgoing mutation keeps its 
   }
 });
 
+test('native status refreshes public metadata and reports pending messages and a durable pause without clearing it', async t => {
+ const f=await fixture(t);await f.runtime.dispose();let delivery;
+ const original=f.ctx.session.get;let model='first';
+ f.ctx.session.get=async args=>({...await original(args),model:{providerID:'provider',id:model}});
+ const runtime=await setupNativePlugin({...f.options,deliveryFactory:args=>{delivery=createNativeDelivery(args);return{...delivery,start(){}};}});t.after(()=>runtime.dispose());
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ const absent=await f.rpc().status(input,context);assert.equal(absent.pending_count,null);assert.equal(absent.metadata,null);assert.equal(f.states.length,0);
+ await runtime.connect('one');const identity=runtime.status('one').client_id,inbox=f.states.at(-1).client.inbox,now=Date.now();
+ inbox.accept({protocol_version:'1',message_id:randomUUID(),recipient_id:identity,recipient_sequence:1,
+  sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
+  origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'Keep unread.'},
+  accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null});
+ delivery.event({type:'session.execution.interrupted',data:{sessionID:'one'}});model='renamed-model';
+ const before=inbox.head(),result=await f.rpc().status(input,context);
+ assert.equal(result.connected,true);assert.equal(result.client_id,identity);assert.equal(result.node_version,process.versions.node);
+ assert.equal(result.metadata.model.id,'renamed-model');assert.equal(result.pending_count,1);
+ assert.equal(result.delivery_paused,true);assert.equal(result.delivery_pause_reason,'session.execution.interrupted');
+ assert.deepEqual(inbox.head(),before);await delivery.tick();assert.deepEqual(inbox.head(),before);
+ await assert.rejects(f.rpc().status(input,{signal:AbortSignal.abort()}));
+ f.ctx.session.get=async args=>({...await original(args),time:{created:2}});
+ await assert.rejects(f.rpc().status(input,context),/mismatch/);
+ f.ctx.session.get=original;await f.rpc().disconnect(input,context);
+ const disconnected=await f.rpc().status(input,context);assert.equal(disconnected.disconnected,true);assert.equal(disconnected.pending_count,null);assert.equal(disconnected.delivery_paused,null);
+});
+
 test('confirmed session expiry replaces the connector journal once before starting delivery', async t => {
   const f = await fixture(t);
   await f.runtime.dispose();

@@ -76,14 +76,16 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       accepted: true, receipt_id: `${binding.sessionID}/${target.native_id}`,
     });
   }
+  const outcomeKey = info => canonical({ outcome: info.outcome ?? null, idle: info.time.idle ?? 0, busy: info.time.busy ?? 0 });
+  const paused = info => !!getState('v2_paused') || ['interrupted', 'failed'].includes(info.outcome)
+    && (info.time.idle ?? 0) >= (info.time.busy ?? 0) && getState('v2_resumed_outcome') !== outcomeKey(info);
   async function deliver() {
     const observedEpoch = epoch;
     const info = await current();
     if (!info) return;
     // Interrupt/failure is durable across reload. Never wake a cancelled or
     // failed session just because the broker has another pending envelope.
-    const idle = info.time.idle ?? 0, busy = info.time.busy ?? 0;
-    if (['interrupted', 'failed'].includes(info.outcome) && idle >= busy || getState('v2_paused')) return;
+    if (paused(info)) return;
     const head = inbox.head();
     if (!head) return;
     if (head.state !== 'pending') {
@@ -144,8 +146,7 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       return call(method, input, () => active() && epoch === observedEpoch && !getState('v2_paused')); },
     permitted: async () => {
       const info = await current();
-      return !!info && !getState('v2_paused') && !(['interrupted', 'failed'].includes(info.outcome)
-        && (info.time.idle ?? 0) >= (info.time.busy ?? 0));
+      return !!info && !paused(info);
     } }) : null;
   function tick() {
     if (!active() || running) return running;
@@ -163,6 +164,12 @@ export function createNativeDelivery({ session, inbox, binding, signal, verify, 
       // Only host-started work, not an idle poll, can reopen cancellation.
       if (event.type === 'session.execution.started') setState('v2_paused', null);
       if (['session.deleted', 'session.moved', 'session.archived'].includes(event.type)) { epoch++; stopped = true; clearInterval(timer); }
+    },
+    status(info) {
+      const local = getState('v2_paused');
+      const reason = info?.revert ? 'session.revert.staged' : local || (info && paused(info) ? `session.execution.${info.outcome}` : null);
+      const known = ['session.execution.interrupted', 'session.execution.failed', 'session.inbox.cancelled', 'session.revert.staged'];
+      return { paused: reason ? true : info ? false : null, pause_reason: reason ? known.includes(reason) ? reason : 'unknown' : null };
     },
     async stop() { stopped = true; epoch++; clearInterval(timer); await running; },
   };

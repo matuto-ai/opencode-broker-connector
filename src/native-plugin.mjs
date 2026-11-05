@@ -86,6 +86,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     state.starting = (async () => {
       const info = await getInfo(sessionID, state.controller.signal);
       const nativeBinding = nativeSessionBinding(info, hostID);
+      state.info = info;
       const settings = candidateSettings ?? await readCurrentSettings();
       state.settings = settings;
       if (!settings || disposed || blocked.has(sessionID) || disconnected.has(sessionID) || state.controller.signal.aborted) throw new Error('psst_connect_required');
@@ -95,9 +96,12 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           || settings.enrollment && Date.parse(settings.enrollment.expiresAt) <= Date.now()) return null;
         try {
           const now = await getInfo(sessionID, state.controller.signal);
-          return selected(sessionID) && !state.controller.signal.aborted && canonical(nativeSessionBinding(now, hostID)) === canonical(nativeBinding) ? now : null;
+          if (!selected(sessionID) || state.controller.signal.aborted || canonical(nativeSessionBinding(now, hostID)) !== canonical(nativeBinding)) return null;
+          state.info = now;
+          return now;
         } catch { return null; }
       };
+      state.verify = valid;
       assertExistingBinding(settings, nativeBinding);
       state.incarnation = settings.broker.registrationVersion === 2 ? openNativeIncarnation({ reference, settings, binding: nativeBinding }) : null;
       state.inbox = state.incarnation?.inbox ?? openNativeInbox({ reference, settings, binding: nativeBinding });
@@ -251,7 +255,15 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     const expired = state?.settings ? !!state.settings.enrollment && Date.parse(state.settings.enrollment.expiresAt) <= Date.now() : authorizationExpired;
     const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
+    let metadata = null, pendingCount = null, delivery = { paused: null, pause_reason: null };
+    if (state?.delivery && !state.controller.signal.aborted) {
+      try { metadata = nativeMetadata(state.info, { ...state.settings, ...metadataOptions }); } catch {}
+      try { pendingCount = state.inbox.stats().pending_count; delivery = state.delivery.status?.(state.info) ?? delivery; }
+      catch { delivery = { paused: true, pause_reason: 'storage_unavailable' }; }
+    }
     return { connector_version: packageInfo.version, host_version: HOST_VERSION, mode: 'native_automatic',
+      node_version: process.versions.node, metadata, pending_count: pendingCount,
+      delivery_paused: delivery.paused, delivery_pause_reason: delivery.pause_reason,
       connected: !disposed && !state?.controller.signal.aborted && !!state?.delivery && selected(sessionID) && authorization === 'active',
       disconnected: disconnected.has(sessionID),
       availability: selected(sessionID) ? 'selected' : 'inactive', authorization_state: authorization,
@@ -289,7 +301,13 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         }); } catch (error) { return setup.failure(error, input.sessionID); }
       };
       registrations.push(await ctx.rpc.register(SETUP_RPC, {
-        status: (input, context) => invoke('broker_setup_status', input, context),
+        status: async (input, context) => {
+          if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          const state = sessions.get(input.sessionID);
+          if (state && !await state.verify?.()) throw new Error('native_session_mismatch');
+          if (context.signal.aborted || !selected(input.sessionID)) throw new Error('native_session_not_selected');
+          return invoke('broker_setup_status', input, context);
+        },
         setup: (input, context) => invoke('broker_setup', input, context),
         cancel: (input, context) => invoke('broker_cancel_setup', input, context),
         connect: (input, context) => connectionCommand('connect', input, context),

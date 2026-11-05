@@ -131,6 +131,29 @@ test('errors and arbitrary status fields never disclose server secrets or privat
   const f = fixture(t, { result: { status: () => { throw Error('/private/token-secret\x1b[2J'); } } });
   await f.run('psst-status'); assert.doesNotMatch(JSON.stringify(f.toasts), /private|token-secret|\x1b/);
 });
+test('status renders identity, runtime, metadata and pending count separately from a delivery pause', async t => {
+  const id='11111111-1111-4111-8111-111111111111';
+  const f=fixture(t,{result:{status:{connected:true,state:'pending',connector_version:'0.8.0',host_version:'2.2.5',node_version:'24.22.2',client_id:id,
+    metadata:{name:'Review',project:'example',model:{id:'native-model'}},pending_count:3,delivery_paused:true,delivery_pause_reason:'session.execution.interrupted',availability:'selected',authorization_state:'active'}}});
+  await f.run('psst-status');const message=f.toasts.at(-1).message;
+  assert.match(message,/Existing connection stays active/);assert.match(message,/Waiting for human approval/);
+  for(const text of [id,'Connector 0.8.0','OpenCode 2.2.5','Node 24.22.2','"Review"','"example"','"native-model"','Pending: 3','paused (interrupted turn)'])assert.ok(message.includes(text),text);
+  assert.match(message,/not model reading or task completion/);
+});
+
+test('disconnected status retains pending setup information and unknown values are not invented', async t => {
+  const f=fixture(t,{result:{status:{connected:false,disconnected:true,state:'paused',pending_count:null,delivery_paused:null,metadata:null,client_id:null}}});
+  await f.run('psst-status');const message=f.toasts.at(-1).message;
+  assert.match(message,/disconnected/);assert.match(message,/Setup: Local setup is paused/);assert.match(message,/Client ID: unknown/);assert.match(message,/Pending: unknown; delivery: unknown/);
+});
+
+test('detailed status rejects malformed values, control sequences, private paths and arbitrary reasons', async t => {
+  const f=fixture(t,{result:{status:{connector_version:'/private/secret',host_version:'x'.repeat(1000),node_version:'24.22.2\x1b[2J',client_id:'/private/secret',
+    metadata:{name:'bad\u202esecret',project:'/private/secret',model:{id:'x'.repeat(1000)}},pending_count:-1,delivery_paused:true,delivery_pause_reason:'/private/secret',authorization_state:'secret',availability:'secret',token:'secret'}}});
+  await f.run('psst-status');const message=f.toasts.at(-1).message;
+  assert.doesNotMatch(message,/secret|\x1b|\u202e|x{100}/);assert.match(message,/paused \(unknown reason\)/);assert.match(message,/Pending: unknown/);
+});
+
 test('safe public status is rendered without arbitrary server fields', async t => {
   const f = fixture(t, { result: { status: { state: 'pending', approval_url: 'https://broker.example.com/admin', request_id: 'ar_123', connectionFile: '/private/secret', token: 'secret' } } });
   await f.run('psst-status'); const rendered = JSON.stringify(f.toasts);

@@ -54,6 +54,10 @@ command to reconcile the same candidate. Do not delete private state or locks.
 The URL-only `broker_setup` tool remains available for an explicitly requested
 initial setup, but an agent tool cannot supply native replacement intent. Use `/psst-reauthorize <https-origin>` for that decision. See [setup, persistence and acceptance](docs/setup-acceptance.md).
 
+### Status details
+
+`/psst-status` reports the exact client ID when available, loaded connector/OpenCode/Node versions, descriptive name/project/model, pending-message count and the current delivery pause reason. A healthy transport connection can still have paused automatic delivery; setup/replacement progress remains separate. Unavailable identity, counts or pause state are shown as unknown, not invented as zero or active. Status refreshes the verified native metadata snapshot without reconnecting, acknowledging messages or clearing a pause. Only bounded public fields are rendered; credentials, private paths and raw errors are excluded. Native admission never proves model reading or task completion.
+
 ## Messages
 
 ### Direct commands and peer collaboration
