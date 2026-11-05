@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.0 — unreleased source candidate
+
+- Prepare version metadata for the merged connector changes and update installation and release instructions. Publication remains a separate owner action.
+
 ## 0.8.0 — unreleased source candidate
 
 - Automatically recover selected-chat reception after transient broker/network failures through heartbeat supervision, with bounded/spaced reconciliation rounds and later automatic retries. Preserve mailbox identity, uncertain operations and human pauses; confirmed identity expiry now blocks instead of silently allocating a replacement mailbox.
