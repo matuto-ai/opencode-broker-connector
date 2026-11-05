@@ -53,6 +53,40 @@ test('cancellation remains paused across reload and never resurrects a native ca
 test('interrupted and failed sessions do not wake automatically, even without event history',async t=>{
  const f=fixture(t);f.accept();for(const outcome of ['interrupted','failed']){f.info.outcome=outcome;f.info.time.idle=5;f.info.time.busy=2;await f.delivery.tick();assert.equal(f.submitted.length,0);}
 });
+test('explicit resume reopens the observed interrupted outcome across reload without changing native state', async t => {
+ const f=fixture(t);f.info.outcome='interrupted';f.info.time.idle=5;f.info.time.busy=2;f.accept();
+ f.delivery.event({type:'session.execution.interrupted',data:{sessionID:'ses_native'}});
+ await f.reopen();await f.delivery.tick();assert.equal(f.submitted.length,0);
+ const before=structuredClone(f.info);
+ assert.equal(await f.delivery.resume({signal:new AbortController().signal,permitted:()=>true}),true);
+ assert.deepEqual(f.info,before);await f.reopen();await f.delivery.tick();assert.equal(f.submitted.length,1);
+ f.promote();f.accept(2);f.info.time.idle=6;await f.delivery.tick();assert.equal(f.submitted.length,1,'a different interrupted outcome is not covered by the old resume');
+});
+
+test('new interruption, cancellation or denied native context always wins over explicit resume', async t => {
+ const f=fixture(t);f.accept();f.delivery.event({type:'session.execution.failed',data:{sessionID:'ses_native'}});
+ for(const context of [{signal:AbortSignal.abort(),permitted:()=>true},{signal:new AbortController().signal,permitted:()=>false}]) {
+  assert.equal(await f.delivery.resume(context),false);await f.delivery.tick();assert.equal(f.submitted.length,0);
+ }
+ const pending=f.delivery.resume({signal:new AbortController().signal,permitted:()=>true});
+ f.delivery.event({type:'session.inbox.cancelled',data:{sessionID:'ses_native'}});
+ assert.equal(await pending,false);await f.delivery.tick();assert.equal(f.submitted.length,0);
+ assert.equal(await f.delivery.resume({signal:new AbortController().signal,permitted:()=>true}),true);
+ f.delivery.event({type:'session.execution.failed',data:{sessionID:'ses_native'}});
+ await f.delivery.tick();assert.equal(f.submitted.length,0,'a new event pauses even with unchanged native timestamps');
+});
+
+test('explicit resume never bypasses revert or retries uncertain native admission', async t => {
+ const f=fixture(t),original=f.session.synthetic;f.accept();
+ f.session.synthetic=async input=>{await original(input);throw Error('lost');};await f.delivery.tick();
+ f.delivery.event({type:'session.execution.interrupted',data:{sessionID:'ses_native'}});await f.reopen();
+ assert.equal(await f.delivery.resume({signal:new AbortController().signal,permitted:()=>true}),true);
+ await f.delivery.tick();assert.equal(f.submitted.length,1);assert.equal(f.inbox.head().state,'uncertain');
+ f.delivery.event({type:'session.revert.staged',data:{sessionID:'ses_native'}});
+ assert.equal(await f.delivery.resume({signal:new AbortController().signal,permitted:()=>true}),false);
+ await f.delivery.tick();assert.equal(f.submitted.length,1);
+});
+
 test('session deletion, move, revert, archive and abort all fence admission',async t=>{
  for(const change of [i=>i.revert={},i=>i.time.archived=1,i=>i.location.directory+='/other',i=>i.time.created=5]){const f=fixture(t);f.accept();change(f.info);await f.delivery.tick();assert.equal(f.submitted.length,0);}
  const f=fixture(t);f.accept();f.controller.abort();await f.delivery.tick();assert.equal(f.submitted.length,0);

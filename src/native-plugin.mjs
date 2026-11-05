@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { canonical } from '../vendor/broker/src/protocol.mjs';
 import { createOpenCodeAdapter, nativeToolDefinitions } from './opencode-adapter.mjs';
-import { createNativeDelivery, nativeSessionBinding, HOST_VERSION } from './native-delivery.mjs';
+import { createNativeDelivery, nativeSessionBinding, HOST_VERSION, DELIVERY_PAUSE_EVENTS } from './native-delivery.mjs';
 import { openNativeIncarnation } from './native-incarnation.mjs';
 import { openNativeInbox } from './native-inbox.mjs';
 import { withNativeLock } from './native-lock.mjs';
@@ -42,7 +42,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   });
   const registryPrefix = 'psst-v2-session:' + createHash('sha256').update(canonical({ directory, workspaceID: ctx.location.workspaceID ?? null })).digest('hex') + ':';
   if (!validID(hostID)) throw new Error('psst_host_binding_unavailable');
-  const sessions = new Map(), preparing = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
+  const sessions = new Map(), preparing = new Map(), deliveryEvents = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
   let disposed = false, closing, events, setup, presenceTimer, synchronizing;
   const presence = presenceFactory({ directory: presenceDirectory(setupOptions.directory ?? installationDirectory(), ctx.location, { create: true }) });
   const selected = sessionID => { try { return presence.selected().has(sessionID); } catch { return false; } };
@@ -131,6 +131,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       if (!await valid()) throw new Error('native_session_mismatch');
       state.delivery = deliveryFactory({ session: ctx.session, client: state.client, inbox: state.inbox, binding: nativeBinding,
         signal: state.controller.signal, verify: valid, available: () => sessions.get(sessionID) === state && selected(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
+      const observed = deliveryEvents.get(sessionID);
+      if (observed?.type) state.delivery.event({ type: observed.type, data: { sessionID } });
       if (!candidateSettings) state.delivery.start();
       return state;
     })();
@@ -150,12 +152,21 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   function connectionCommand(kind, { sessionID }, context) {
     if (!validID(sessionID) || !selected(sessionID) || !(context?.signal instanceof AbortSignal) || context.signal.aborted || disposed)
       return Promise.reject(new Error('native_session_not_selected'));
+    const resumeRevision = deliveryEvents.get(sessionID)?.revision ?? 0;
     const previous = connectionCommands.get(sessionID);
     if (previous && kind === 'connect') return Promise.reject(new Error('native_connection_busy'));
     const command = { controller: new AbortController() };
     previous?.controller.abort();
     connectionCommands.set(sessionID, command);
     const signal = AbortSignal.any([context.signal, command.controller.signal, controller.signal]);
+    const resumeDelivery = async state => {
+      const resumed = await state.delivery.resume?.({ signal,
+        permitted: () => !signal.aborted && selected(sessionID) && sessions.get(sessionID) === state
+          && (deliveryEvents.get(sessionID)?.revision ?? 0) === resumeRevision });
+      if ((deliveryEvents.get(sessionID)?.revision ?? 0) !== resumeRevision) return false;
+      if (resumed === true) deliveryEvents.set(sessionID, { revision: resumeRevision, type: null });
+      return resumed;
+    };
     command.promise = (async () => {
       await previous?.promise.catch(() => {});
       await getInfo(sessionID, signal);
@@ -176,7 +187,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         return status(sessionID);
       }
       const current = sessions.get(sessionID);
-      if (current?.delivery && !current.controller.signal.aborted) return status(sessionID);
+      if (current?.delivery && !current.controller.signal.aborted) {
+        const resumed = await resumeDelivery(current);
+        return { ...status(sessionID), delivery_resumed: resumed };
+      }
       const wasDisconnected = disconnected.delete(sessionID);
       const abort = () => sessions.get(sessionID)?.controller.abort();
       signal.addEventListener('abort', abort, { once: true });
@@ -190,7 +204,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         if (signal.aborted || !selected(sessionID)) throw new Error('native_session_not_selected');
         const state = await connect(sessionID);
         if (signal.aborted || !selected(sessionID) || state.controller.signal.aborted) throw new Error('native_session_not_selected');
-        return status(sessionID);
+        const resumed = await resumeDelivery(state);
+        return { ...status(sessionID), delivery_resumed: resumed };
       } catch (error) {
         if (wasDisconnected) disconnected.add(sessionID);
         await close(sessionID);
@@ -365,6 +380,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         if (event.type === 'location.shutdown' && event.location?.directory === directory) { void dispose(); break; }
         const sessionID = event.data?.sessionID;
         setup?.event(event);
+        if (DELIVERY_PAUSE_EVENTS.includes(event.type) || event.type === 'session.execution.started')
+          deliveryEvents.set(sessionID, { revision: (deliveryEvents.get(sessionID)?.revision ?? 0) + 1, type: event.type });
         const state = sessions.get(sessionID);
         state?.delivery?.event(event);
         if (['session.deleted', 'session.archived', 'session.moved'].includes(event.type)) {

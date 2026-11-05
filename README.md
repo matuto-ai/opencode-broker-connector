@@ -29,11 +29,11 @@ Running setup again resumes the same pending request. For replacement, use `/pss
 
 ### Connect and disconnect
 
-- **`/psst-connect`** reconnects this selected chat using saved authorization and its existing mailbox. It is a no-op when already connected and never enrolls or replaces authorization. Without saved authorization it directs you to `/psst-setup`.
+- **`/psst-connect`** reconnects this selected chat using saved authorization and its existing mailbox, and explicitly resumes a saved interrupted/failed-turn delivery pause. An already connected chat keeps the same transport and identity. It never enrolls or replaces authorization. Without saved authorization it directs you to `/psst-setup`.
 - **`/psst-disconnect`** stops this chat's polling, heartbeat and automatic delivery, and pauses its pending setup wait. Credentials, unread messages and uncertain-operation journals are retained. The chat stays disconnected across focus changes and reloads until `/psst-connect`; other chats are unaffected. It does not revoke credentials or cancel an already submitted broker request.
 - **`/psst-status`** distinguishes an explicit disconnect from setup progress. **`/psst-cancel-setup`** pauses only setup, leaving an existing connection running.
 
-These are native slash/palette commands, not a separate `psst` executable. Reconnect preserves native interrupted/failed-turn delivery guards. Reconnecting does not resume a paused setup request; use `/psst-setup` afterward when that is intended. The broker may display the old connection until its existing lease expires.
+These are native slash/palette commands, not a separate `psst` executable. Only the explicit native connect action can resume a delivery pause; automatic reconnection, peer input and tools cannot. A newer interruption/cancellation wins over a connect in progress. Revert, selection, authorization and uncertain-admission guards remain enforced: resume never retries an uncertain native submission. Reconnecting does not resume a paused setup request; use `/psst-setup` afterward when that is intended. The broker may display the old connection until its existing lease expires.
 
 ### Read-only diagnostics
 

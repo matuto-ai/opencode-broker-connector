@@ -79,6 +79,7 @@ function statusMessage(result) {
   if (typeof result?.request_id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(result.request_id)) message += ` Request: ${result.request_id}.`;
   if (result?.request_outcome === 'unknown') message += ' The request outcome is unknown. Check /psst-status in the original chat before retrying; the saved request must be reconciled.';
   else if (result?.request_outcome === 'saved') message += ' The exact request is saved and will be reused.';
+  if (result?.connected === true && result?.delivery_resumed === false) message += ' Automatic delivery remains paused; a newer cancellation or native guard was retained. Check /psst-status before retrying.';
   if (result?.disconnected === true) message = 'Psst is disconnected for this chat. Polling, heartbeat and automatic delivery are stopped. Use /psst-connect to reuse saved authorization. Local data is retained.';
   return message;
 }

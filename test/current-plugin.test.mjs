@@ -398,6 +398,39 @@ test('replacement cancellation while attachment waits cannot commit or disturb w
  assert.equal(commits,0);assert.equal(runtime.status('one').client_id,original);assert.ok(await f.states[0].currentBinding());
 });
 
+test('only native connect receives explicit delivery-resume authority and newer pause events invalidate it', async t => {
+ const {EventEmitter,on}=await import('node:events');
+ const f=await fixture(t);await f.runtime.dispose();const emitter=new EventEmitter();let resumes=0;
+ f.ctx.event.subscribe=async function*({signal}){for await(const [event] of on(emitter,'event',{signal}))yield event;};
+ const runtime=await setupNativePlugin({...f.options,deliveryFactory:()=>({start(){},stop:async()=>{},event(){},resume:async({signal,permitted})=>{resumes++;return !signal.aborted&&permitted();}})});t.after(()=>runtime.dispose());
+ await runtime.connect('one');await f.hooks.get('prompt')({sessionID:'one'});
+ await f.tools.get('broker_list_clients').execute({}, {sessionID:'one',messageID:'msg',id:'list',signal:new AbortController().signal});
+ assert.equal(resumes,0);
+ const context={signal:new AbortController().signal},input={sessionID:'one'};
+ assert.equal((await f.rpc().connect(input,context)).delivery_resumed,true);assert.equal(resumes,1);
+ const original=f.ctx.session.get;let entered,release;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ f.ctx.session.get=async args=>{entered();await new Promise(resolve=>{release=resolve;});return original(args);};
+ const connecting=f.rpc().connect(input,context);await ready;
+ emitter.emit('event',{type:'session.execution.interrupted',data:{sessionID:'one'}});await new Promise(resolve=>setImmediate(resolve));
+ release();const result=await connecting;
+ assert.equal(result.connected,true);assert.equal(result.delivery_resumed,false);assert.equal(resumes,2);
+});
+
+test('a cancellation during initial attachment reaches the new delivery before stale connect can resume it', async t => {
+ const {EventEmitter,on}=await import('node:events');
+ const f=await fixture(t);await f.runtime.dispose();const emitter=new EventEmitter(),observed=[];let entered,release;
+ const ready=new Promise(resolve=>{entered=resolve;});
+ f.ctx.event.subscribe=async function*({signal}){for await(const [event] of on(emitter,'event',{signal}))yield event;};
+ const runtime=await setupNativePlugin({...f.options,
+  adapterFactory:args=>({...f.options.adapterFactory(args),start:async()=>{entered();await new Promise(resolve=>{release=resolve;});}}),
+  deliveryFactory:()=>({start(){},stop:async()=>{},event:event=>observed.push(event.type),resume:async({permitted})=>permitted()})
+ });t.after(()=>runtime.dispose());
+ const connecting=f.rpc().connect({sessionID:'one'},{signal:new AbortController().signal});await ready;
+ emitter.emit('event',{type:'session.inbox.cancelled',data:{sessionID:'one'}});await new Promise(resolve=>setImmediate(resolve));release();
+ assert.equal((await connecting).delivery_resumed,false);assert.deepEqual(observed,['session.inbox.cancelled']);
+});
+
 test('expired authorization retains exact old native anchor while setup remains available for explicit repair',async t=>{
  const f=await fixture(t);await f.runtime.connect('one');const anchor=f.stored.get('psst-v2-host-id'),oldID=f.runtime.status('one').client_id;await f.runtime.dispose();f.stored.clear();let recoveryReads=0;
  const loadSettings=async options=>{if(options?.identityRecovery){recoveryReads++;return{...f.settings,authorizationExpired:true};}throw Object.assign(Error('credential_expired'),{code:'credential_expired'});};
