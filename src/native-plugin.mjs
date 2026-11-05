@@ -98,6 +98,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
           return selected(sessionID) && !state.controller.signal.aborted && canonical(nativeSessionBinding(now, hostID)) === canonical(nativeBinding) ? now : null;
         } catch { return null; }
       };
+      state.verify = valid;
       assertExistingBinding(settings, nativeBinding);
       state.incarnation = settings.broker.registrationVersion === 2 ? openNativeIncarnation({ reference, settings, binding: nativeBinding }) : null;
       state.inbox = state.incarnation?.inbox ?? openNativeInbox({ reference, settings, binding: nativeBinding });
@@ -229,7 +230,10 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     if (previous) await close(sessionID, previous);
     return candidate;
   }
-  const catalog = nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive');
+  const catalog = [...nativeToolDefinitions(reference.TOOL_DEFINITIONS).filter(def => def.name !== 'broker_receive'), {
+    name: 'broker_identity', description: 'Read this exact selected OpenCode conversation address, descriptive metadata and pending-message count. Use the full client ID for replies; labels are not routing authority. Never enrolls or acknowledges messages.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  }];
   function dispose() {
     if (closing) return closing;
     // Every caller joins the same drain, including shutdown triggered by the
@@ -317,6 +321,13 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
             try {
               if (!(context?.signal instanceof AbortSignal) || context.signal.aborted || !validID(context.messageID) || !validID(context.id)) throw new Error('native_session_mismatch');
               const state = await connect(context.sessionID);
+              if (definition.name === 'broker_identity') {
+                const info = await state.verify();
+                if (!info || context.signal.aborted || operationSignal.aborted) throw new Error('native_session_mismatch');
+                return { content: display({ client_id: state.inbox.identity.client_id, client_type: state.inbox.identity.client_type,
+                  native_session_id: context.sessionID, metadata: nativeMetadata(info, { ...state.settings, ...metadataOptions }, process.env, state.inbox.identity.client_id),
+                  pending_count: state.inbox.stats().pending_count }) };
+              }
               let operationStartedAt;
               if (['broker_send', 'broker_resend'].includes(definition.name)) {
                 const bounded = AbortSignal.any([context.signal, operationSignal, controller.signal, AbortSignal.timeout(2000)]);

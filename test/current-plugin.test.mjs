@@ -145,7 +145,7 @@ test('explicit reconnect cannot lift unknown disabled-session tombstones', async
 });
 
 test('OpenCode registers automatic-only lifecycle tools, preserves drafts and isolates native session identities',async t=>{
- const f=await fixture(t);assert.equal(f.tools.size,8);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
+ const f=await fixture(t);assert.equal(f.tools.size,9);assert.equal(f.tools.has('broker_receive'),false);assert.equal(f.tools.has('broker_acknowledge'),false);
  const prompt={sessionID:'one',messageID:'human',prompt:{text:'keep my draft'}};await f.hooks.get('prompt')(prompt);await f.runtime.connect('one');await f.runtime.connect('two');assert.equal(f.states.length,2);assert.notEqual(f.states[0].identity.client_id,f.states[1].identity.client_id);assert.equal(prompt.prompt.text,'keep my draft');
 });
 test('native reauthorization RPC checks endpoint without granting model replacement authority',async t=>{
@@ -259,6 +259,36 @@ test('native reauthorization command keeps RPC fences and recovers lost replies 
  assert.equal(readPending(directory).requestId, 'new');
  assert.deepEqual(readFileSync(join(f.dir, 'old.token')), tokenBefore);
  assert.deepEqual(readFileSync(join(oldJournal, 'binding.json')), oldBinding);
+});
+
+test('broker_identity reads only the verified conversation and preserves its inbox', async t => {
+ const f=await fixture(t),signal=new AbortController().signal;
+ const invoke=sessionID=>f.tools.get('broker_identity').execute({}, {sessionID,messageID:'msg',id:'identity',signal}).then(result=>JSON.parse(result.content));
+ const one=await invoke('one'),two=await invoke('two');
+ assert.equal(one.client_type,'opencode');assert.equal(one.native_session_id,'one');assert.equal(one.pending_count,0);
+ assert.equal(one.client_id,f.runtime.status('one').client_id);assert.notEqual(one.client_id,two.client_id);
+ assert.equal(typeof one.metadata.name,'string');assert.equal(one.metadata.project,f.dir.split('/').at(-1));
+ assert.deepEqual(one.metadata.model,{provider:null,id:null,source:'unknown'});
+ const inbox=f.states[0].client.inbox,now=Date.now();
+ const envelope={protocol_version:'1',message_id:randomUUID(),recipient_id:one.client_id,recipient_sequence:1,
+  sender:{client_id:randomUUID(),client_type:'pi',name:'peer',model:{provider:null,id:null,source:'unknown'},project:null,metadata_revision:1},
+  origin:'broker_agent',authority:'untrusted_agent_input',content:{type:'text/plain',text:'Do not consume this message.'},
+  accepted_at:new Date(now).toISOString(),expires_at:new Date(now+86400000).toISOString(),correlation_id:null,reply_to_message_id:null};
+ inbox.accept(envelope);
+ assert.deepEqual(await invoke('one'),{...one,pending_count:1});assert.deepEqual(inbox.head().envelope,envelope);
+ assert.doesNotMatch(JSON.stringify(one),/token|stateDirectory|receipt|session_instance_id/);
+});
+
+test('broker_identity rejects cancellation, changed native identity and explicit disconnect', async t => {
+ const f=await fixture(t),definition=f.tools.get('broker_identity');
+ const invoke=signal=>definition.execute({}, {sessionID:'one',messageID:'msg',id:'identity',signal}).then(result=>JSON.parse(result.content));
+ assert.equal((await invoke(AbortSignal.abort())).error.code,'session_mismatch');assert.equal(f.states.length,0);
+ await f.runtime.connect('one');
+ f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'changed',location:{directory:f.dir},time:{created:2}});
+ const changed=await invoke(new AbortController().signal);assert.equal(changed.error.code,'session_mismatch');assert.equal(changed.client_id,undefined);
+ f.ctx.session.get=async({sessionID})=>({id:sessionID,projectID:'project',location:{directory:f.dir},time:{created:1}});
+ await f.rpc().disconnect({sessionID:'one'},{signal:new AbortController().signal});
+ assert.equal((await invoke(new AbortController().signal)).error.code,'session_mismatch');
 });
 
 test('OpenCode durable native tool-call ID is private and replay stable, distinct calls are distinct',async t=>{
