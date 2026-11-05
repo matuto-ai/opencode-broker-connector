@@ -65,6 +65,14 @@ function statusMessage(result) {
   let message = result?.connected === true
     ? 'Psst is connected for this selected chat.' + (setupMessage && result.state !== 'setup_needed' ? ` Existing connection stays active. Setup: ${setupMessage}` : '')
     : setupMessage ?? 'Psst is not connected. Use /psst-setup to configure it.';
+  const transport = result?.transport;
+  if (transport?.recovery === 'blocked') message = 'Psst reception is blocked. Local data is retained; inspect connector diagnostics. Automatic mailbox or authorization replacement is disabled.';
+  else if (transport?.recovery === 'retry_waiting') message = transport.heartbeat === 'unreachable'
+    ? 'The broker is unreachable. Psst reception is waiting to retry automatically; no manual connect or new approval is needed.'
+    : 'Psst reception is waiting for its next automatic recovery attempt. Saved authorization and local data are retained.';
+  else if (transport?.recovery === 'recovering') message = 'Psst is automatically recovering reception for this chat. Waiting for a successful mailbox poll; no manual connect is needed.';
+  else if (transport?.reception === 'polling') message = 'Psst is polling for this chat. Waiting for the first successful mailbox response; an in-flight long poll is normal.';
+  else if (transport?.reception === 'paused') message = 'Psst reception is explicitly paused. Automatic recovery will not lift the pause. Saved authorization and local data are retained.';
   if (result?.authorization_state === 'expired') message = 'The current authorization expired. Use /psst-reauthorize <https-origin> for an explicitly approved replacement. Existing local data is retained.';
   if (result?.authorization_state === 'rejected') message = 'The broker rejected the current authorization. Use /psst-reauthorize <https-origin> for an explicitly approved replacement. Existing local data is retained.';
   const approvedCandidate = result?.state === 'approved'

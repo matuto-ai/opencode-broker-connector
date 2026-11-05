@@ -42,7 +42,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   });
   const registryPrefix = 'psst-v2-session:' + createHash('sha256').update(canonical({ directory, workspaceID: ctx.location.workspaceID ?? null })).digest('hex') + ':';
   if (!validID(hostID)) throw new Error('psst_host_binding_unavailable');
-  const sessions = new Map(), preparing = new Map(), deliveryEvents = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
+  const sessions = new Map(), preparing = new Map(), deliveryEvents = new Map(), blocked = new Set(), disconnected = new Set(), connectionCommands = new Map(), authorizationBlocked = new Map(), transportBlocked = new Map(), archived = new Set(), controller = new AbortController(), registrations = [], toolScope = createToolScope();
   let disposed = false, closing, events, setup, presenceTimer, synchronizing;
   const presence = presenceFactory({ directory: presenceDirectory(setupOptions.directory ?? installationDirectory(), ctx.location, { create: true }) });
   const selected = sessionID => { try { return presence.selected().has(sessionID); } catch { return false; } };
@@ -77,7 +77,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   }
   async function connect(sessionID, { candidateSettings } = {}) {
     const target = candidateSettings ? preparing : sessions;
-    if (disposed || blocked.has(sessionID) || disconnected.has(sessionID) || !candidateSettings && authorizationBlocked.has(sessionID) || archived.has(sessionID)) throw new Error('native_plugin_closed');
+    if (disposed || blocked.has(sessionID) || disconnected.has(sessionID) || !candidateSettings && (authorizationBlocked.has(sessionID) || transportBlocked.has(sessionID)) || archived.has(sessionID)) throw new Error('native_plugin_closed');
     if (!selected(sessionID)) throw new Error('native_session_not_selected');
     let state = target.get(sessionID);
     if (state) { await state.starting; if (state.closing) throw new Error('native_session_closing'); return state; }
@@ -109,7 +109,6 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       await ctx.storage.set(registryPrefix + sessionID, { sessionID, binding: nativeBinding, enabled: true });
       if (blocked.has(sessionID) || disconnected.has(sessionID)) await ctx.storage.set(registryPrefix + sessionID, { sessionID, enabled: false, ...(disconnected.has(sessionID) ? { reason: 'disconnected' } : {}) });
       if (!await valid()) throw new Error('native_session_mismatch');
-      for (let attempt = 0; attempt < 2; attempt++) {
       state.client = clientFactory ? clientFactory(state.inbox) : new reference.BrokerClient({ ...settings.broker, inbox: state.inbox });
       const binding = { sessionID, directory, worktree: directory, lifetime: state.lifetime, signal: state.controller.signal };
       state.adapter = adapterFactory({ reference, tool, client: state.client, binding,
@@ -117,23 +116,19 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         observeMetadata: async () => { const current = await valid(); if (!current) return null; const metadata = nativeMetadata(current, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id);
           return canonical(metadata) === canonical(state.inbox.getState('metadata')) ? null : metadata; },
         operationContext: context => ({ operationId: canonical({ hostID, sessionID, messageID: context.messageID, callID: context.callID }), operationStartedAt: context.operationStartedAt }),
+        onHealthChange: health => {
+          state.transportStatus = health;
+          if (sessions.get(sessionID) === state && health.recovery === 'blocked') transportBlocked.set(sessionID, health);
+        },
         onDiagnostic: entry => {
           diagnostic(entry.code);
-          if (entry.code === 'native_binding_unavailable' || entry.code === 'session_expired' && state.delivery) queueMicrotask(() => void close(sessionID, state).catch(() => {}));
-          if (['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) { if (sessions.get(sessionID) === state) authorizationBlocked.set(sessionID, entry.code); queueMicrotask(() => void close(sessionID, state).catch(() => {})); }
+          if (entry.code === 'native_binding_unavailable') queueMicrotask(() => void close(sessionID, state).catch(() => {}));
+          if (sessions.get(sessionID) === state && ['unauthenticated', 'forbidden', 'registration_upgrade_required', 'retry_window_elapsed'].includes(entry.code)) authorizationBlocked.set(sessionID, entry.code);
         } });
-      try { await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id)); break; }
-      catch (error) {
-        if (attempt !== 0 || error.code !== 'session_expired' || !state.incarnation || !state.client.expiredIdentityConfirmed) throw error;
-        await state.adapter.stop();
-        if (!await valid()) throw new Error('native_session_mismatch');
-        state.inbox = await state.incarnation.replace({ client: state.client, verifySession: async () => !!await valid(), signal: state.controller.signal });
-        state.adapter = undefined;
-      }
-      }
+      await state.adapter.start(nativeMetadata(info, { ...settings, ...metadataOptions }, process.env, state.inbox.identity.client_id));
       if (!await valid()) throw new Error('native_session_mismatch');
       state.delivery = deliveryFactory({ session: ctx.session, client: state.client, inbox: state.inbox, binding: nativeBinding,
-        signal: state.controller.signal, verify: valid, available: () => sessions.get(sessionID) === state && selected(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
+        signal: state.controller.signal, verify: valid, available: () => sessions.get(sessionID) === state && selected(sessionID) && !transportBlocked.has(sessionID), onDiagnostic: entry => { state.deliveryStatus = entry.code; diagnostic(entry.code); } });
       const observed = deliveryEvents.get(sessionID);
       if (observed?.type) state.delivery.event({ type: observed.type, data: { sessionID } });
       if (!candidateSettings) state.delivery.start();
@@ -144,6 +139,9 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       // Storage uncertainty is terminal for automatic restore in this plugin
       // lifetime. A deliberate restart re-reads the durable pointer first.
       if (!candidateSettings && error.code === 'native_incarnation_uncertain') blocked.add(sessionID);
+      if (!candidateSettings && ['session_expired', 'session_mismatch', 'identity_conflict', 'invalid_response', 'storage_unavailable', 'inbox_corrupt', 'unauthenticated', 'forbidden'].includes(error.code)) {
+        transportBlocked.set(sessionID, { heartbeat: 'blocked', reception: 'blocked', recovery: 'blocked', error_code: error.code });
+      }
       state.controller.abort(); await state.delivery?.stop(); await state.adapter?.stop();
       if (!state.adapter) state.inbox?.close();
       state.incarnation?.close();
@@ -240,7 +238,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
       if (signal.aborted || candidate.controller.signal.aborted || disconnected.has(sessionID)) throw new Error('psst_setup_cancelled');
       // No await between committed selection and map promotion. Starting native
       // delivery is synchronous and has no submission side effect until its tick.
-      preparing.delete(sessionID); sessions.set(sessionID, candidate); authorizationBlocked.delete(sessionID); authorizationExpired = false;
+      preparing.delete(sessionID); sessions.set(sessionID, candidate); authorizationBlocked.delete(sessionID); transportBlocked.delete(sessionID); authorizationExpired = false;
       candidate.delivery.start();
     } catch (error) {
       if (candidate && sessions.get(sessionID) !== candidate) await close(sessionID, candidate);
@@ -272,6 +270,7 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
   const status = sessionID => {
     const state = sessions.get(sessionID);
     const expired = state?.settings ? !!state.settings.enrollment && Date.parse(state.settings.enrollment.expiresAt) <= Date.now() : authorizationExpired;
+    const transport = transportBlocked.get(sessionID) ?? state?.adapter?.status?.() ?? state?.transportStatus ?? null;
     const rejected = ['unauthenticated', 'forbidden'].includes(authorizationBlocked.get(sessionID));
     const authorization = expired ? 'expired' : rejected ? 'rejected' : authorizationBlocked.has(sessionID) ? 'blocked' : state?.delivery ? 'active' : 'unknown';
     let metadata = null, pendingCount = null, delivery = { paused: null, pause_reason: null };
@@ -283,7 +282,9 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
     return { connector_version: packageInfo.version, host_version: HOST_VERSION, mode: 'native_automatic',
       node_version: process.versions.node, metadata, pending_count: pendingCount,
       delivery_paused: delivery.paused, delivery_pause_reason: delivery.pause_reason,
-      connected: !disposed && !state?.controller.signal.aborted && !!state?.delivery && selected(sessionID) && authorization === 'active',
+      connected: !disposed && !state?.controller.signal.aborted && !!state?.delivery && selected(sessionID) && authorization === 'active'
+        && (!transport || transport.reception === 'healthy' && transport.heartbeat !== 'unreachable' && transport.recovery === 'idle'),
+      transport,
       disconnected: disconnected.has(sessionID),
       availability: selected(sessionID) ? 'selected' : 'inactive', authorization_state: authorization,
       client_id: state?.client?.inbox?.identity?.client_id ?? null,
@@ -432,7 +433,8 @@ export async function setupNativePlugin({ ctx, reference, tool, loadSettings, cl
         for (const record of readNativeBindings(settings)) {
           const b = record.binding;
           if (active.has(b.sessionID) && b.hostID === hostID && b.location.directory === directory
-            && b.location.workspaceID === ctx.location.workspaceID && !blocked.has(b.sessionID) && !disconnected.has(b.sessionID)) {
+            && b.location.workspaceID === ctx.location.workspaceID && !blocked.has(b.sessionID) && !disconnected.has(b.sessionID)
+            && !transportBlocked.has(b.sessionID) && !authorizationBlocked.has(b.sessionID)) {
             if (archived.has(b.sessionID)) {
               try { await getInfo(b.sessionID); archived.delete(b.sessionID); } catch { continue; }
             }

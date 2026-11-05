@@ -56,6 +56,21 @@ test('connect/disconnect dispatch directly to selected-session RPC without setup
   assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
 });
 
+test('current transport recovery is reported without setup, manual-connect advice or historical failure text', async t => {
+  let status = { connected: false, transport: { heartbeat: 'unreachable', reception: 'retry_waiting', recovery: 'retry_waiting', error_code: 'request_failed' } };
+  const f = fixture(t, { result: { status: () => status } });
+  await f.run('psst-status');
+  assert.match(f.toasts.at(-1).message, /retry automatically/); assert.doesNotMatch(f.toasts.at(-1).message, /Use \/psst-connect|Use \/psst-setup/);
+  status = { connected: false, transport: { heartbeat: 'healthy', reception: 'polling', recovery: 'recovering', error_code: 'request_failed' } };
+  await f.run('psst-status'); assert.match(f.toasts.at(-1).message, /automatically recovering/);
+  status = { connected: true, last_delivery_status: 'native_delivery_paused', transport: { heartbeat: 'healthy', reception: 'healthy', recovery: 'idle', error_code: null } };
+  await f.run('psst-status'); assert.match(f.toasts.at(-1).message, /is connected/); assert.doesNotMatch(f.toasts.at(-1).message, /paused|request_failed/);
+  status = { connected: false, transport: { heartbeat: 'blocked', reception: 'blocked', recovery: 'blocked', error_code: '/private/token-secret' } };
+  await f.run('psst-status'); assert.match(f.toasts.at(-1).message, /reception is blocked/); assert.doesNotMatch(f.toasts.at(-1).message, /private|token-secret/);
+  assert.deepEqual(f.calls.map(call => call.name), ['status', 'status', 'status', 'status']);
+  assert.equal(f.prompts.length, 0); assert.equal(f.confirmations.length, 0);
+});
+
 test('connect does not present a newer delivery pause as resumed', async t => {
   const f=fixture(t,{result:{connect:{connected:true,delivery_resumed:false}}});
   await f.run('psst-connect');assert.match(f.toasts.at(-1).message,/Automatic delivery remains paused/);

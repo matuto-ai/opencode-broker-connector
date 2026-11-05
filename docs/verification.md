@@ -30,6 +30,27 @@ that only check workflow text. Add a focused regression at the connector boundar
 for a real bug. Unit results are not native-host, model-response or deployment
 acceptance evidence.
 
+## Outage and return regression
+
+Run the retained caller-facing fault scenarios without credentials, sockets, a broker process or an OpenCode executable:
+
+```sh
+node --test test/transport-recovery.test.mjs test/current-setup-ui.test.mjs
+```
+
+The fixture runs the real native plugin, adapter, pinned `BrokerClient`/`AdapterRuntime`, durable SQLite inbox and native delivery code. Only broker request/response outcomes, host APIs and time are controlled. Its reproducible outage/return sequence is:
+
+1. Start a selected native chat with a mailbox poll in flight and an uncertain outgoing operation already journaled.
+2. Interrupt that poll and fail five heartbeat intervals. Assert no new registration, mailbox polling, approval request, model polling or human-draft mutation while offline; status reports automatic retry waiting.
+3. Return a validated stale-lease heartbeat response before any successful heartbeat. Fail three owned-session reconciliation attempts, with one- and two-second spacing; assert round exhaustion remains retry waiting.
+4. Advance the heartbeat-length cooldown, restore the broker, and deliver the queued envelope into the same native session and inbox. Assert one exact synthetic admission, durable inbox storage before broker completion, preserved outgoing identity, and no read ACK or automatic reply.
+
+Additional cases retain the original claim key after an ambiguous completion, deduplicate durable storage, recover a receive-only failure while heartbeats succeed, distinguish an ordinary long poll from a stall, preserve explicit human delivery pauses, block malformed successful responses and security/storage/identity failures, serialize overlapping failures, and fence old work on native-session change/shutdown. Current status and slash-command rendering are checked separately from historical diagnostics.
+
+The coordinated local Psst candidate `92f84f1fda7453000272e2b4fac0725a55bd3556` also retains seven shared-runtime fault tests, including real loopback HTTP parsing of HTML/non-protocol JSON 502/503/504 responses, strict malformed 200/security responses, concurrent recovery, round cooldown and disabled-receiver health. Its focused runtime/reference/presence/registration-v2 checks passed 75 tests. Those upstream checks are separate from this connector's process-free unit suite; the seven vendored files remain exact hash-pinned source bytes.
+
+These results demonstrate controlled caller-facing recovery, not an authenticated native OpenCode host or a deployed broker outage. Native-host qualification still needs a disposable compatible broker: keep one chat selected, queue a peer message, interrupt broker connectivity during its long poll, restore the broker, and observe the same chat receive it without `/psst-connect`, host restart or new approval. Check the original client identity and retained local data, then repeat with an explicit human pause and disconnect to confirm neither is lifted. Do not infer model consumption or replies from durable native admission.
+
 ## Release packaging
 
 `npm run pack:check` separately checks the npm file list for runtime entry points

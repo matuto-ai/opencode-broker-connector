@@ -6,6 +6,9 @@
 
 ## 0.8.0 — unreleased source candidate
 
+- Automatically recover selected-chat reception after transient broker/network failures through heartbeat supervision, with bounded/spaced reconciliation rounds and later automatic retries. Preserve mailbox identity, uncertain operations and human pauses; confirmed identity expiry now blocks instead of silently allocating a replacement mailbox.
+- Report current heartbeat, reception and recovery health separately from historical diagnostics; treat non-protocol 502/503/504 proxy responses as transient while keeping successful protocol validation strict. Coordinate the exact local Psst runtime candidate with the other connectors.
+
 - Add native `/psst-connect` and `/psst-disconnect` slash/palette commands. Reuse saved authorization and mailbox identity; persist per-chat disconnect across reload, pause its setup wait, and retain credentials and unread/uncertain journals.
 
 - Treat a valid explicit `/psst-reauthorize <https-origin>` command as replacement intent without another confirmation dialog; retain native request/revision/ownership fences, host permissions, broker approval and candidate recovery.

@@ -1,11 +1,11 @@
 import { readFileSync, lstatSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import { createHash } from 'node:crypto';
-export const REFERENCE_COMMIT = 'f32ddc79ec7b812062ed3f6de7b9a0c12a7128f3';
+export const REFERENCE_COMMIT = '92f84f1fda7453000272e2b4fac0725a55bd3556';
 const HASHES = Object.freeze({
   "reference/inbox.mjs": "fbf0fa6096996cb9bc3f928e55f3eca496420880a03460e993dda3417b32ad88",
-  "reference/client.mjs": "e8ab94e6de6b5afb17b1dded9839fefa26481fef87ed715b041c09d41dbc93d5",
-  "reference/runtime.mjs": "8fdaa105b2e81aeaabb628131671989f951148f602844bca6819af827269f2c3",
+  "reference/client.mjs": "bb965e7d0bb697b2548a461e956ba68aa72e3c8ba8ed329f9989a5001079b0da",
+  "reference/runtime.mjs": "f48e62feadc17993787906ce58e064c36bce66bfb0db8ffaa519f52bedbe76c9",
   "reference/tools.mjs": "e1836d5c33ed80a9e15c1ca9d07888c9db3caf40aeb2a115c813f74a45077c6e",
   "reference/mcp-stdio.mjs": "88c61c995f9285ef7e22c401d7f0cf50fefc7dd6c76ae79c6bcc94097a33a5c3",
   "reference/errors.mjs": "85b0d0736c5a439f7c66697c3b1ce6cee998cda744dd3169c856ebf2b82bd2a7",
